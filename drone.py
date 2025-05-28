@@ -31,8 +31,6 @@ from lxml import etree
 
 logger = logging.getLogger(__name__)
 
-# Map our UA_TYPE_MAPPING indices (0–15) to CoT event types for drones
-# Fallback to rotary‑wing VTOL if unknown or not in map
 UA_COT_TYPE_MAP = {
     1: 'a-f-A-f',       # Aeroplane / fixed wing
     2: 'a-u-A-M-H-R',   # Helicopter / multirotor
@@ -51,8 +49,15 @@ UA_COT_TYPE_MAP = {
     15: 'b-m-p-s-m',    # Other
 }
 
+# Updated ARGB color mapping
+AFFILIATION_COLOR = {
+    "authorized": "-16776961",      # Blue
+    "unauthorized": "-65536",       # Red
+    "unknown": "-256",              # Yellow
+}
+
 class Drone:
-    """Represents a drone and its telemetry data."""
+    """Represents a drone and its telemetry data, including TAK affiliation/color."""
 
     def __init__(
         self,
@@ -90,13 +95,15 @@ class Drone:
         index: int = 0,
         runtime: int = 0,
         caa_id: str = "",
+        affiliation: str = "unknown",   # NEW DEFAULT: unknown (civilian context)
     ):
         self.id = id
         self.id_type = id_type
         self.ua_type = ua_type
         self.ua_type_name = ua_type_name
 
-        # Remote ID extras
+        self.affiliation = affiliation   # <--- Store the affiliation
+
         self.operator_id_type = operator_id_type
         self.operator_id = operator_id
         self.op_status = op_status
@@ -112,7 +119,6 @@ class Drone:
         self.timestamp = timestamp
         self.timestamp_accuracy = timestamp_accuracy
 
-        # store previous position for fallback bearing calculation
         self.prev_lat: Optional[float] = None
         self.prev_lon: Optional[float] = None
 
@@ -174,9 +180,8 @@ class Drone:
         index: int = 0,
         runtime: int = 0,
         caa_id: str = "",
+        affiliation: Optional[str] = None,
     ):
-        """Updates the drone's telemetry data, computes fallback bearing if needed."""
-        # remember previous location
         self.prev_lat = self.lat
         self.prev_lon = self.lon
 
@@ -201,8 +206,6 @@ class Drone:
             self.ua_type = ua_type
         if ua_type_name:
             self.ua_type_name = ua_type_name
-
-        # update Remote ID extras
         if operator_id_type:
             self.operator_id_type = operator_id_type
         if operator_id:
@@ -231,20 +234,19 @@ class Drone:
             self.timestamp = timestamp
         if timestamp_accuracy:
             self.timestamp_accuracy = timestamp_accuracy
-
         if caa_id:
             self.caa_id = caa_id
+        if affiliation is not None:
+            self.affiliation = affiliation
 
         self.last_update_time = time.time()
 
-        # fallback bearing calculation if no heading provided
         if self.direction is None and self.prev_lat is not None:
             lat1 = math.radians(self.prev_lat)
             lon1 = math.radians(self.prev_lon)
             lat2 = math.radians(self.lat)
             lon2 = math.radians(self.lon)
             delta_lon = lon2 - lon1
-
             x = math.sin(delta_lon) * math.cos(lat2)
             y = (math.cos(lat1) * math.sin(lat2) -
                  math.sin(lat1) * math.cos(lat2) * math.cos(delta_lon))
@@ -252,16 +254,12 @@ class Drone:
             self.direction = (math.degrees(theta) + 360) % 360
 
     def to_cot_xml(self, stale_offset: Optional[float] = None) -> bytes:
-        """Converts the drone's telemetry data to a CoT XML message, including a <track>."""
         now = datetime.datetime.utcnow()
         if stale_offset is not None:
             stale = now + datetime.timedelta(seconds=stale_offset)
         else:
             stale = now + datetime.timedelta(minutes=10)
-
-        # pick CoT type by UA index, fallback to rotary‑wing VTOL
         cot_type = UA_COT_TYPE_MAP.get(self.ua_type, 'a-u-A-M-H-R')
-
         event = etree.Element(
             'event',
             version='2.0',
@@ -272,7 +270,6 @@ class Drone:
             stale=stale.strftime('%Y-%m-%dT%H:%M:%S.%fZ'),
             how='m-g'
         )
-
         etree.SubElement(
             event,
             'point',
@@ -282,19 +279,15 @@ class Drone:
             ce='35.0',
             le='999999'
         )
-
         detail = etree.SubElement(event, 'detail')
         etree.SubElement(detail, 'contact', callsign=self.id)
         etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
-
-        # include <track> so ATAK will draw a track
         etree.SubElement(
             detail,
             'track',
             course=str(self.direction or 0.0),
             speed=str(self.speed or 0.0)
         )
-
         remarks = (
             f"MAC: {self.mac}, RSSI: {self.rssi}dBm; "
             f"ID Type: {self.id_type}; UA Type: {self.ua_type_name} "
@@ -306,27 +299,23 @@ class Drone:
             f"Index: {self.index}; Runtime: {self.runtime}s"
         )
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(remarks)
-        etree.SubElement(detail, 'color', argb='-256')
-        # dropped <usericon> so icon derives from event type
-
+        color_argb = AFFILIATION_COLOR.get(self.affiliation, "-8355712")
+        etree.SubElement(detail, 'color', argb=color_argb)
         xml_bytes = etree.tostring(event, pretty_print=True,
                                    xml_declaration=True, encoding='UTF-8')
-        logger.debug("CoT XML for drone '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
+        logger.debug("CoT XML for drone '%s' (affiliation: %s):\n%s", self.id, self.affiliation, xml_bytes.decode('utf-8'))
         return xml_bytes
 
     def to_pilot_cot_xml(self, stale_offset: Optional[float] = None) -> bytes:
-        """Generates a CoT XML message for the pilot location."""
         now = datetime.datetime.utcnow()
         if stale_offset is not None:
             stale = now + datetime.timedelta(seconds=stale_offset)
         else:
             stale = now + datetime.timedelta(minutes=10)
-
         base_id = self.id
         if base_id.startswith("drone-"):
             base_id = base_id[len("drone-"):]
         uid = f"pilot-{base_id}"
-
         event = etree.Element(
             'event',
             version='2.0',
@@ -346,38 +335,35 @@ class Drone:
             ce='35.0',
             le='999999'
         )
-
         detail = etree.SubElement(event, 'detail')
         callsign = f"pilot-{base_id}"
         etree.SubElement(detail, 'contact', callsign=callsign)
         etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
         etree.SubElement(
-        detail,
-        'usericon',
-        iconsetpath='com.atakmap.android.maps.public/Civilian/Person.png'
+            detail,
+            'usericon',
+            iconsetpath='com.atakmap.android.maps.public/Civilian/Person.png'
         )
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(
             f"Pilot location for drone {self.id}"
         )
-
+        color_argb = AFFILIATION_COLOR.get(self.affiliation, "-8355712")
+        etree.SubElement(detail, 'color', argb=color_argb)
         xml_bytes = etree.tostring(event, pretty_print=True,
                                    xml_declaration=True, encoding='UTF-8')
-        logger.debug("CoT XML for pilot '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
+        logger.debug("CoT XML for pilot '%s' (affiliation: %s):\n%s", self.id, self.affiliation, xml_bytes.decode('utf-8'))
         return xml_bytes
 
     def to_home_cot_xml(self, stale_offset: Optional[float] = None) -> bytes:
-        """Generates a CoT XML message for the home location."""
         now = datetime.datetime.utcnow()
         if stale_offset is not None:
             stale = now + datetime.timedelta(seconds=stale_offset)
         else:
             stale = now + datetime.timedelta(minutes=10)
-
         base_id = self.id
         if base_id.startswith("drone-"):
             base_id = base_id[len("drone-"):]
         uid = f"home-{base_id}"
-
         event = etree.Element(
             'event',
             version='2.0',
@@ -397,21 +383,21 @@ class Drone:
             ce='35.0',
             le='999999'
         )
-
         detail = etree.SubElement(event, 'detail')
         callsign = f"home-{base_id}"
         etree.SubElement(detail, 'contact', callsign=callsign)
         etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
         etree.SubElement(
-        detail,
-        'usericon',
-        iconsetpath='com.atakmap.android.maps.public/Civilian/House.png'
+            detail,
+            'usericon',
+            iconsetpath='com.atakmap.android.maps.public/Civilian/House.png'
         )
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(
             f"Home location for drone {self.id}"
         )
-
+        color_argb = AFFILIATION_COLOR.get(self.affiliation, "-8355712")
+        etree.SubElement(detail, 'color', argb=color_argb)
         xml_bytes = etree.tostring(event, pretty_print=True,
                                    xml_declaration=True, encoding='UTF-8')
-        logger.debug("CoT XML for home '%s':\n%s", self.id, xml_bytes.decode('utf-8'))
+        logger.debug("CoT XML for home '%s' (affiliation: %s):\n%s", self.id, self.affiliation, xml_bytes.decode('utf-8'))
         return xml_bytes
