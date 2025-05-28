@@ -53,6 +53,7 @@ from system_status import SystemStatus
 from manager import DroneManager
 from messaging import CotMessenger
 from utils import load_config, validate_config, get_str, get_int, get_float, get_bool
+from affiliations import load_affiliations, DEFAULT_AFFILIATION_INI
 
 UA_TYPE_MAPPING = {
     0: 'No UA type defined',
@@ -170,7 +171,8 @@ def zmq_to_cot(
     rate_limit: float = 1.0,
     max_drones: int = 30,
     inactivity_timeout: float = 60.0,
-    multicast_interface: Optional[str] = None
+    multicast_interface: Optional[str] = None,
+    affiliation_file: str = DEFAULT_AFFILIATION_INI
 ):
     """Main function to convert ZMQ messages to CoT and send to TAK server."""
 
@@ -444,6 +446,12 @@ def zmq_to_cot(
                         logger.debug(f"Drone id already has prefix: {drone_info['id']}")
                     drone_id = drone_info['id']
 
+                    affiliations = load_affiliations(affiliation_file)
+                    base_uid = drone_id
+                    if base_uid.startswith('drone-'):
+                        base_uid = base_uid[6:]
+                    affiliation = affiliations.get(base_uid, "unknown")
+
                     if drone_id in drone_manager.drone_dict:
                         drone = drone_manager.drone_dict[drone_id]
                         drone.update(
@@ -479,7 +487,8 @@ def zmq_to_cot(
                             timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
                             index=drone_info.get('index', 0),
                             runtime=drone_info.get('runtime', 0),
-                            caa_id=drone_info.get('caa', "")
+                            caa_id=drone_info.get('caa', ""),
+                            affiliation=affiliation
                         )
                         logger.debug(f"Updated drone: {drone_id}")
                     else:
@@ -517,7 +526,8 @@ def zmq_to_cot(
                             timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
                             index=drone_info.get('index', 0),
                             runtime=drone_info.get('runtime', 0),
-                            caa_id=drone_info.get('caa', "")
+                            caa_id=drone_info.get('caa', ""),
+                            affiliation=affiliation
                         )
                         drone_manager.update_or_add_drone(drone_id, drone)
                         logger.debug(f"Added new drone: {drone_id}")
@@ -657,6 +667,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-drones", type=int, help="Maximum number of drones to track simultaneously")
     parser.add_argument("--inactivity-timeout", type=float, help="Time in seconds before a drone is considered inactive")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--affiliation-ini", type=str, default=DEFAULT_AFFILIATION_INI, help="Path to affiliation INI file for UID color mapping")
     args = parser.parse_args()
 
     # Load config file if provided
@@ -733,5 +744,6 @@ if __name__ == "__main__":
         rate_limit=config["rate_limit"],
         max_drones=config["max_drones"],
         inactivity_timeout=config["inactivity_timeout"],
-        multicast_interface=config["tak_multicast_interface"]
+        multicast_interface=config["tak_multicast_interface"],
+        affiliation_file=args.affiliation_ini
     )
