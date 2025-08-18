@@ -321,13 +321,14 @@ class Drone:
             f"Index: {self.index}; Runtime: {self.runtime}s"
         )
 
-        # --- NEW: if this is an alert, add succinct human-readable reason + freq ---
+        # Always try to add frequency (DJI usually supplies it)
+        fmhz = self._fmt_freq_mhz(self.freq)
+        if fmhz is not None:
+            remarks += f"; Freq: ~{fmhz} MHz"
+
+        # Alert reason
         if self.id == "drone-alert":
-            fmhz = self._fmt_freq_mhz(self.freq)
-            if fmhz is not None:
-                remarks += f"; Alert: Unknown DJI OcuSync format (Encrypted/Partial) – detected ~{fmhz} MHz"
-            else:
-                remarks += f"; Alert: Unknown DJI OcuSync format (Encrypted/Partial)"
+            remarks += "; Alert: Unknown DJI OcuSync format (Encrypted/Partial)"
 
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(remarks)
         etree.SubElement(detail, 'color', argb='-256')
