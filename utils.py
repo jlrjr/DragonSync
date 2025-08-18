@@ -123,7 +123,7 @@ def validate_config(config: Dict[str, Any]):
 
     # Validate ZMQ port
     zmq_port = get_int(config.get('zmq_port'))
-    if not (1 <= zmq_port <= 65535):
+    if zmq_port is None or not (1 <= zmq_port <= 65535):
         raise ValueError(f"Invalid ZMQ port: {zmq_port}. Must be between 1 and 65535.")
 
     # Retrieve TAK configurations
