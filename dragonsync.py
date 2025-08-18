@@ -273,6 +273,7 @@ def zmq_to_cot(
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     poller = zmq.Poller()
     poller.register(telemetry_socket, zmq.POLLIN)
@@ -281,12 +282,31 @@ def zmq_to_cot(
 
     try:
         while True:
-            socks = dict(poller.poll(timeout=1000))
+            try:
+                socks = dict(poller.poll(timeout=1000))
+            except zmq.error.ZMQError as e:
+                # ETERM happens during shutdown; otherwise, log and keep going
+                if e.errno == getattr(zmq, "ETERM", None):
+                    break
+                logger.exception(f"Poller error: {e}")
+                time.sleep(0.5)
+                continue
             if telemetry_socket in socks and socks[telemetry_socket] == zmq.POLLIN:
-                logger.debug("Received a message on the telemetry socket")
-                message = telemetry_socket.recv_json()
-                # logger.debug(f"Received telemetry JSON: {message}")
-                drone_info = parse_drone_info(message, UA_TYPE_MAPPING)
+                try:
+                    message = telemetry_socket.recv_json()
+                except ValueError as e:
+                    logger.warning(f"Telemetry JSON decode failed: {e}")
+                    continue
+                except Exception as e:
+                    logger.exception(f"Telemetry recv failed: {e}")
+                    continue
+            
+                try:
+                    drone_info = parse_drone_info(message, UA_TYPE_MAPPING)
+                except Exception as e:
+                    logger.exception(f"parse_drone_info crashed; skipping message: {e}")
+                    continue
+            
                 if not drone_info:
                     logger.debug("Parser returned no drone_info; skipping.")
                     continue
@@ -430,65 +450,62 @@ def zmq_to_cot(
                         logger.warning("CAA-only message received without a MAC. Skipping.")
 
             if status_socket and status_socket in socks and socks[status_socket] == zmq.POLLIN:
-                logger.debug("Received a message on the status socket")
-                status_message = status_socket.recv_json()
-                # logger.debug(f"Received system status JSON: {status_message}")
-                
-                serial_number = status_message.get('serial_number', 'unknown')
-                gps_data = status_message.get('gps_data', {})
-                lat = get_float(gps_data.get('latitude', 0.0))
-                lon = get_float(gps_data.get('longitude', 0.0))
-                alt = get_float(gps_data.get('altitude', 0.0))
-                speed = get_float(gps_data.get('speed', 0.0))
-                track = get_float(gps_data.get('track', 0.0))
-
-                system_stats = status_message.get('system_stats', {})
-                ant_sdr_temps = status_message.get('ant_sdr_temps', {})
-                pluto_temp = ant_sdr_temps.get('pluto_temp', 'N/A')
-                zynq_temp  = ant_sdr_temps.get('zynq_temp',  'N/A')
-
-                # Extract system statistics with defaults
-                cpu_usage = get_float(system_stats.get('cpu_usage', 0.0))
-                memory = system_stats.get('memory', {})
-                memory_total = get_float(memory.get('total', 0.0)) / (1024 * 1024)  # Convert bytes to MB
-                memory_available = get_float(memory.get('available', 0.0)) / (1024 * 1024)
-                disk = system_stats.get('disk', {})
-                disk_total = get_float(disk.get('total', 0.0)) / (1024 * 1024)  # Convert bytes to MB
-                disk_used = get_float(disk.get('used', 0.0)) / (1024 * 1024)
-                temperature = get_float(system_stats.get('temperature', 0.0))
-                uptime = get_float(system_stats.get('uptime', 0.0))
-
-                if lat == 0.0 and lon == 0.0:
-                    logger.warning(
-                        "Latitude and longitude are missing or zero. "
-                        "Proceeding with CoT message using [0.0, 0.0]."
+                try:
+                    status_message = status_socket.recv_json()
+                except ValueError as e:
+                    logger.warning(f"Status JSON decode failed: {e}")
+                    continue
+                except Exception as e:
+                    logger.exception(f"Status recv failed: {e}")
+                    continue
+            
+                try:
+                    serial_number = status_message.get('serial_number', 'unknown')
+                    gps_data = status_message.get('gps_data', {})
+                    lat = get_float(gps_data.get('latitude', 0.0))
+                    lon = get_float(gps_data.get('longitude', 0.0))
+                    alt = get_float(gps_data.get('altitude', 0.0))
+                    speed = get_float(gps_data.get('speed', 0.0))
+                    track = get_float(gps_data.get('track', 0.0))
+            
+                    system_stats = status_message.get('system_stats', {})
+                    ant_sdr_temps = status_message.get('ant_sdr_temps', {})
+                    pluto_temp = ant_sdr_temps.get('pluto_temp', 'N/A')
+                    zynq_temp  = ant_sdr_temps.get('zynq_temp',  'N/A')
+            
+                    cpu_usage = get_float(system_stats.get('cpu_usage', 0.0))
+                    memory = system_stats.get('memory', {})
+                    memory_total = get_float(memory.get('total', 0.0)) / (1024 * 1024)
+                    memory_available = get_float(memory.get('available', 0.0)) / (1024 * 1024)
+                    disk = system_stats.get('disk', {})
+                    disk_total = get_float(disk.get('total', 0.0)) / (1024 * 1024)
+                    disk_used = get_float(disk.get('used', 0.0)) / (1024 * 1024)
+                    temperature = get_float(system_stats.get('temperature', 0.0))
+                    uptime = get_float(system_stats.get('uptime', 0.0))
+            
+                    if lat == 0.0 and lon == 0.0:
+                        logger.warning("Latitude and longitude are missing or zero. Proceeding with [0.0, 0.0].")
+            
+                    system_status = SystemStatus(
+                        serial_number=serial_number,
+                        lat=lat, lon=lon, alt=alt, speed=speed, track=track,
+                        cpu_usage=cpu_usage,
+                        memory_total=memory_total, memory_available=memory_available,
+                        disk_total=disk_total, disk_used=disk_used,
+                        temperature=temperature, uptime=uptime,
+                        pluto_temp=pluto_temp, zynq_temp=zynq_temp
                     )
-
-                system_status = SystemStatus(
-                    serial_number=serial_number,
-                    lat=lat,
-                    lon=lon,
-                    alt=alt,
-                    speed=speed,
-                    track=track,
-                    cpu_usage=cpu_usage,
-                    memory_total=memory_total,
-                    memory_available=memory_available,
-                    disk_total=disk_total,
-                    disk_used=disk_used,
-                    temperature=temperature,
-                    uptime=uptime,
-                    pluto_temp=pluto_temp,
-                    zynq_temp=zynq_temp 
-                )
-
-                cot_xml = system_status.to_cot_xml()
-
-                # Sending CoT message via CotMessenger
-                cot_messenger.send_cot(cot_xml)
-                logger.info("Sent CoT message to TAK/multicast.")
-                
-                # Also publish WarDragon (ground sensor) to Lattice if enabled
+                    cot_xml = system_status.to_cot_xml()
+                except Exception as e:
+                    logger.exception(f"Status handling failed: {e}")
+                    continue
+            
+                try:
+                    cot_messenger.send_cot(cot_xml)
+                    logger.info("Sent CoT message to TAK/multicast.")
+                except Exception as e:
+                    logger.exception(f"send_cot(system) failed: {e}")
+            
                 if lattice_sink is not None:
                     try:
                         lattice_sink.publish_system(status_message)
@@ -496,11 +513,29 @@ def zmq_to_cot(
                         logger.warning(f"Lattice publish_system failed: {e}")
 
             # Send drone updates via DroneManager
-            drone_manager.send_updates()
-    except Exception as e:
-        logger.error(f"An error occurred in zmq_to_cot: {e}")
+            try:
+                drone_manager.send_updates()
+            except Exception as e:
+                logger.exception(f"send_updates failed (continuing): {e}")
     except KeyboardInterrupt:
-        signal_handler(None, None)
+    signal_handler(None, None)  # exits 0
+    except Exception:
+        logger.exception("Top-level error in zmq_to_cot — exiting for systemd restart")
+        try:
+            telemetry_socket.close(0)
+        except Exception:
+            pass
+        try:
+            if status_socket:
+                status_socket.close(0)
+        except Exception:
+            pass
+        try:
+            if not context.closed:
+                context.term()
+        except Exception:
+            pass
+        sys.exit(1)
 
 # Configuration and Execution
 if __name__ == "__main__":
