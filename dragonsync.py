@@ -518,7 +518,7 @@ def zmq_to_cot(
             except Exception as e:
                 logger.exception(f"send_updates failed (continuing): {e}")
     except KeyboardInterrupt:
-    signal_handler(None, None)  # exits 0
+        signal_handler(None, None)  # exits 0
     except Exception:
         logger.exception("Top-level error in zmq_to_cot — exiting for systemd restart")
         try:
