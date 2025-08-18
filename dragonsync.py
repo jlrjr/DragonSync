@@ -306,6 +306,11 @@ def zmq_to_cot(
                         if 'RSSI' in item:
                             drone_info['rssi'] = item['RSSI']
 
+                        # ─── Frequency Message (DJI-only path) ─────────────────────
+                        if 'Frequency Message' in item:
+                            fobj = item['Frequency Message']
+                            drone_info['freq'] = get_float(fobj.get('frequency', None), None)
+
                         # ─── Basic ID ──────────────────────────────────────────────
                         if 'Basic ID' in item:
                             basic = item['Basic ID']
@@ -516,7 +521,8 @@ def zmq_to_cot(
                             timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
                             index=drone_info.get('index', 0),
                             runtime=drone_info.get('runtime', 0),
-                            caa_id=drone_info.get('caa', "")
+                            caa_id=drone_info.get('caa', ""),
+                            freq=drone_info.get('freq')
                         )
                         logger.debug(f"Updated drone: {drone_id}")
                     else:
@@ -554,7 +560,8 @@ def zmq_to_cot(
                             timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
                             index=drone_info.get('index', 0),
                             runtime=drone_info.get('runtime', 0),
-                            caa_id=drone_info.get('caa', "")
+                            caa_id=drone_info.get('caa', ""),
+                            freq=drone_info.get('freq')
                         )
                         drone_manager.update_or_add_drone(drone_id, drone)
                         logger.debug(f"Added new drone: {drone_id}")
@@ -597,7 +604,8 @@ def zmq_to_cot(
                                     timestamp_accuracy=drone_info.get('timestamp_accuracy', ""),
                                     index=drone_info.get('index', 0),
                                     runtime=drone_info.get('runtime', 0),
-                                    caa_id=drone_info.get('caa', "")
+                                    caa_id=drone_info.get('caa', ""),
+                                    freq=drone_info.get('freq')
                                 )
                                 logger.debug(f"Updated existing drone with CAA info for MAC: {drone_info['mac']}")
                                 updated = True
