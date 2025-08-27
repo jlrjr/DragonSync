@@ -90,6 +90,7 @@ class Drone:
         index: int = 0,
         runtime: int = 0,
         caa_id: str = "",
+        freq: Optional[float] = None,
     ):
         self.id = id
         self.id_type = id_type
@@ -138,6 +139,7 @@ class Drone:
         self.last_sent_lon = lon
         self.caa_id = caa_id
         self.last_keepalive_time = 0.0
+        self.freq: Optional[float] = freq
 
     def update(
         self,
@@ -174,6 +176,7 @@ class Drone:
         index: int = 0,
         runtime: int = 0,
         caa_id: str = "",
+        freq: Optional[float] = None,
     ):
         """Updates the drone's telemetry data, computes fallback bearing if needed."""
         # remember previous location
@@ -234,6 +237,8 @@ class Drone:
 
         if caa_id:
             self.caa_id = caa_id
+        if freq is not None:
+            self.freq = freq
 
         self.last_update_time = time.time()
 
@@ -250,6 +255,16 @@ class Drone:
                  math.sin(lat1) * math.cos(lat2) * math.cos(delta_lon))
             theta = math.atan2(x, y)
             self.direction = (math.degrees(theta) + 360) % 360
+
+    @staticmethod
+    def _fmt_freq_mhz(freq: Optional[float]) -> Optional[float]:
+        """Return frequency in MHz (rounded). If value looks like Hz, convert to MHz."""
+        if freq is None or not isinstance(freq, (int, float)) or math.isnan(freq) or math.isinf(freq):
+            return None
+        f = float(freq)
+        if f > 1e5:
+            f = f / 1e6
+        return round(f, 3)
 
     def to_cot_xml(self, stale_offset: Optional[float] = None) -> bytes:
         """Converts the drone's telemetry data to a CoT XML message, including a <track>."""
@@ -305,6 +320,16 @@ class Drone:
             f"Course: {self.direction}°; "
             f"Index: {self.index}; Runtime: {self.runtime}s"
         )
+
+        # Always try to add frequency (DJI usually supplies it)
+        fmhz = self._fmt_freq_mhz(self.freq)
+        if fmhz is not None:
+            remarks += f"; Freq: ~{fmhz} MHz"
+
+        # Alert reason
+        if self.id == "drone-alert":
+            remarks += "; Alert: Unknown DJI OcuSync format (Encrypted/Partial)"
+
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(remarks)
         etree.SubElement(detail, 'color', argb='-256')
         # dropped <usericon> so icon derives from event type
@@ -315,7 +340,14 @@ class Drone:
         return xml_bytes
 
     def to_pilot_cot_xml(self, stale_offset: Optional[float] = None) -> bytes:
-        """Generates a CoT XML message for the pilot location."""
+        """Generates a CoT XML message for the pilot location.
+
+        Returns empty bytes when UID is 'drone-alert' (pilot not decoded from OcuSync)."""
+        # --- NEW: suppress when alert (no pilot from OcuSync) ---
+        if self.id == "drone-alert":
+            logger.debug("Skipping pilot CoT for 'drone-alert' (no pilot decoded).")
+            return b""
+
         now = datetime.datetime.utcnow()
         if stale_offset is not None:
             stale = now + datetime.timedelta(seconds=stale_offset)
@@ -352,9 +384,9 @@ class Drone:
         etree.SubElement(detail, 'contact', callsign=callsign)
         etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
         etree.SubElement(
-        detail,
-        'usericon',
-        iconsetpath='com.atakmap.android.maps.public/Civilian/Person.png'
+            detail,
+            'usericon',
+            iconsetpath='com.atakmap.android.maps.public/Civilian/Person.png'
         )
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(
             f"Pilot location for drone {self.id}"
@@ -366,7 +398,14 @@ class Drone:
         return xml_bytes
 
     def to_home_cot_xml(self, stale_offset: Optional[float] = None) -> bytes:
-        """Generates a CoT XML message for the home location."""
+        """Generates a CoT XML message for the home location.
+
+        Returns empty bytes when UID is 'drone-alert' (home not decoded from OcuSync)."""
+        # --- NEW: suppress when alert (no home from OcuSync) ---
+        if self.id == "drone-alert":
+            logger.debug("Skipping home CoT for 'drone-alert' (no home decoded).")
+            return b""
+
         now = datetime.datetime.utcnow()
         if stale_offset is not None:
             stale = now + datetime.timedelta(seconds=stale_offset)
@@ -403,9 +442,9 @@ class Drone:
         etree.SubElement(detail, 'contact', callsign=callsign)
         etree.SubElement(detail, 'precisionlocation', geopointsrc='gps', altsrc='gps')
         etree.SubElement(
-        detail,
-        'usericon',
-        iconsetpath='com.atakmap.android.maps.public/Civilian/House.png'
+            detail,
+            'usericon',
+            iconsetpath='com.atakmap.android.maps.public/Civilian/House.png'
         )
         etree.SubElement(detail, 'remarks').text = xml.sax.saxutils.escape(
             f"Home location for drone {self.id}"
