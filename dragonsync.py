@@ -238,6 +238,13 @@ def zmq_to_cot(
             mqtt_host=config["mqtt_host"],
             mqtt_port=config["mqtt_port"],
             mqtt_topic=config["mqtt_topic"],
+            mqtt_username=config.get("mqtt_username"),
+            mqtt_password=config.get("mqtt_password"),
+            mqtt_tls=config.get("mqtt_tls", False),
+            mqtt_ca_file=config.get("mqtt_ca_file"),
+            mqtt_certfile=config.get("mqtt_certfile"),
+            mqtt_keyfile=config.get("mqtt_keyfile"),
+            mqtt_tls_insecure=config.get("mqtt_tls_insecure", False),
             extra_sinks=extra_sinks,  # may raise TypeError on older manager.py
         )
     except TypeError:
@@ -564,6 +571,13 @@ if __name__ == "__main__":
     parser.add_argument("--mqtt-host", type=str, help="MQTT broker host")
     parser.add_argument("--mqtt-port", type=int, help="MQTT broker port")
     parser.add_argument("--mqtt-topic", type=str, help="MQTT topic for drone messages")
+    parser.add_argument("--mqtt-username", type=str, help="MQTT username")
+    parser.add_argument("--mqtt-password", type=str, help="MQTT password")
+    parser.add_argument("--mqtt-tls", action="store_true", help="Enable MQTT TLS")
+    parser.add_argument("--mqtt-ca-file", type=str, help="Path to CA file for MQTT TLS")
+    parser.add_argument("--mqtt-certfile", type=str, help="Path to client certificate for MQTT TLS (optional)")
+    parser.add_argument("--mqtt-keyfile", type=str, help="Path to client key for MQTT TLS (optional)")
+    parser.add_argument("--mqtt-tls-insecure", action="store_true", help="(UNSAFE) Skip MQTT TLS hostname/chain verification")
     # ---- Lattice (optional) ----
     parser.add_argument("--lattice-enabled", action="store_true", help="Enable publishing to Lattice")
     parser.add_argument("--lattice-token", type=str, help="Lattice environment token (or env LATTICE_TOKEN / ENVIRONMENT_TOKEN)")
@@ -625,6 +639,14 @@ if __name__ == "__main__":
         "mqtt_host": args.mqtt_host if hasattr(args, "mqtt_host") and args.mqtt_host is not None else get_str(config_values.get("mqtt_host", "127.0.0.1")),
         "mqtt_port": args.mqtt_port if hasattr(args, "mqtt_port") and args.mqtt_port is not None else get_int(config_values.get("mqtt_port", 1883)),
         "mqtt_topic": args.mqtt_topic if hasattr(args, "mqtt_topic") and args.mqtt_topic is not None else get_str(config_values.get("mqtt_topic", "wardragon/drones")),
+         "mqtt_username": args.mqtt_username if hasattr(args, "mqtt_username") and args.mqtt_username is not None else get_str(config_values.get("mqtt_username")),
+        "mqtt_password": args.mqtt_password if hasattr(args, "mqtt_password") and args.mqtt_password is not None else get_str(config_values.get("mqtt_password")),
+        "mqtt_tls": args.mqtt_tls if hasattr(args, "mqtt_tls") and args.mqtt_tls is not None else get_bool(config_values.get("mqtt_tls", False)),
+        "mqtt_ca_file": args.mqtt_ca_file if hasattr(args, "mqtt_ca_file") and args.mqtt_ca_file is not None else get_str(config_values.get("mqtt_ca_file")),
+        "mqtt_certfile": args.mqtt_certfile if hasattr(args, "mqtt_certfile") and args.mqtt_certfile is not None else get_str(config_values.get("mqtt_certfile")),
+        "mqtt_keyfile": args.mqtt_keyfile if hasattr(args, "mqtt_keyfile") and args.mqtt_keyfile is not None else get_str(config_values.get("mqtt_keyfile")),
+        "mqtt_tls_insecure": args.mqtt_tls_insecure if hasattr(args, "mqtt_tls_insecure") and args.mqtt_tls_insecure is not None else get_bool(config_values.get("mqtt_tls_insecure", False)),
+        
         # ---- Lattice (optional) config block ----
         "lattice_enabled": args.lattice_enabled or get_bool(config_values.get("lattice_enabled"), False),
         # Environment (Authorization) token
