@@ -41,10 +41,27 @@ logger = logging.getLogger(__name__)
 class DroneManager:
     """Manages a collection of drones and handles their updates."""
 
-    def __init__(self, max_drones=30, rate_limit=1.0, inactivity_timeout=60.0,
-                 cot_messenger: Optional[CotMessenger] = None,
-                 mqtt_enabled=False, mqtt_host='127.0.0.1', mqtt_port=1883, mqtt_topic='wardragon/drones',
-                 extra_sinks: Optional[List] = None):
+    def __init__(
+        self,
+        max_drones=30,
+        rate_limit=1.0,
+        inactivity_timeout=60.0,
+        cot_messenger: Optional[CotMessenger] = None,
+        mqtt_enabled=False,
+        mqtt_host='127.0.0.1',
+        mqtt_port=1883,
+        mqtt_topic='wardragon/drones',
+        # --- Enhancement: MQTT auth/TLS options ---
+        mqtt_username: Optional[str] = None,
+        mqtt_password: Optional[str] = None,
+        mqtt_tls: bool = False,
+        mqtt_ca_file: Optional[str] = None,
+        mqtt_certfile: Optional[str] = None,
+        mqtt_keyfile: Optional[str] = None,
+        mqtt_tls_insecure: bool = False,
+        # ------------------------------------------
+        extra_sinks: Optional[List] = None
+    ):
         self.drones = deque(maxlen=max_drones)
         self.drone_dict = {}
         self.rate_limit = rate_limit
@@ -59,7 +76,24 @@ class DroneManager:
             if mqtt is None:
                 logger.critical("MQTT support requested, but paho-mqtt is not installed!")
                 raise ImportError("paho-mqtt required for MQTT support")
+
             self.mqtt_client = mqtt.Client()
+
+            if mqtt_username is not None:
+                self.mqtt_client.username_pw_set(mqtt_username, mqtt_password)
+
+            if mqtt_tls:
+                try:
+                    self.mqtt_client.tls_set(
+                        ca_certs=mqtt_ca_file,
+                        certfile=mqtt_certfile,
+                        keyfile=mqtt_keyfile,
+                    )
+                    self.mqtt_client.tls_insecure_set(bool(mqtt_tls_insecure))
+                except Exception as e:
+                    logger.critical(f"Failed to configure MQTT TLS: {e}")
+                    raise
+
             try:
                 self.mqtt_client.connect(mqtt_host, mqtt_port, 60)
                 self.mqtt_client.loop_start()
