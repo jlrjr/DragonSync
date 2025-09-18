@@ -77,11 +77,41 @@ class DroneManager:
                 logger.critical("MQTT support requested, but paho-mqtt is not installed!")
                 raise ImportError("paho-mqtt required for MQTT support")
 
+            # Create client
             self.mqtt_client = mqtt.Client()
 
+            # Route paho internal logs to our logger when available (nice during -d)
+            try:
+                self.mqtt_client.enable_logger(logger)  # paho >=1.6
+            except Exception:
+                # Older paho may not have enable_logger; fall back to on_log callback below
+                pass
+
+            # Callbacks for connection lifecycle and publish acks
+            def _on_connect(c, u, flags, rc, props=None):
+                # rc==0 means success
+                logger.info("MQTT connected rc=%s flags=%s", rc, flags)
+
+            def _on_disconnect(c, u, rc, props=None):
+                logger.warning("MQTT disconnected rc=%s", rc)
+
+            def _on_publish(c, u, mid):
+                logger.debug("MQTT published mid=%s", mid)
+
+            def _on_log(c, u, level, buf):
+                # Visible at DEBUG level; shows socket/TLS/errors, etc.
+                logger.debug("MQTT on_log: %s", buf)
+
+            self.mqtt_client.on_connect = _on_connect
+            self.mqtt_client.on_disconnect = _on_disconnect
+            self.mqtt_client.on_publish = _on_publish
+            self.mqtt_client.on_log = _on_log
+
+            # Username/password over plain TCP (TLS optional below)
             if mqtt_username is not None:
                 self.mqtt_client.username_pw_set(mqtt_username, mqtt_password)
 
+            # TLS (kept as-is; only activates if you pass mqtt_tls=True)
             if mqtt_tls:
                 try:
                     self.mqtt_client.tls_set(
@@ -94,9 +124,27 @@ class DroneManager:
                     logger.critical(f"Failed to configure MQTT TLS: {e}")
                     raise
 
+            # Connect and start background loop
             try:
-                self.mqtt_client.connect(mqtt_host, mqtt_port, 60)
+                self.mqtt_client.connect(mqtt_host, int(mqtt_port), keepalive=60)
                 self.mqtt_client.loop_start()
+
+                # Briefly wait to confirm connection (if supported by this paho version)
+                connected = False
+                deadline = time.time() + 3.0
+                is_conn = getattr(self.mqtt_client, "is_connected", None)
+                while time.time() < deadline and callable(is_conn) and not self.mqtt_client.is_connected():
+                    time.sleep(0.05)
+                if callable(is_conn):
+                    connected = self.mqtt_client.is_connected()
+
+                if connected:
+                    logger.info(
+                        "MQTT: connected to %s:%s (username=%s)",
+                        mqtt_host, mqtt_port, "<set>" if mqtt_username else "<empty>"
+                    )
+                else:
+                    logger.warning("MQTT: no connect confirmation within timeout; check broker/creds/port")
             except Exception as e:
                 logger.critical(f"Failed to connect to MQTT broker: {e}")
                 self.mqtt_enabled = False
@@ -148,7 +196,15 @@ class DroneManager:
 
                 if self.mqtt_enabled and self.mqtt_client:
                     try:
-                        self.mqtt_client.publish(self.mqtt_topic, json.dumps(vars(drone)))
+                        payload = json.dumps(vars(drone), default=str)
+                        logger.debug(
+                            "MQTT publish topic=%s bytes=%d id=%s",
+                            self.mqtt_topic, len(payload), getattr(drone, "id", "")
+                        )
+                        info = self.mqtt_client.publish(self.mqtt_topic, payload)
+                        # Surface non-success codes (rare on qos=0 but helpful)
+                        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+                            logger.warning("MQTT publish returned rc=%s", info.rc)
                     except Exception as e:
                         logger.warning(f"Failed to publish to MQTT: {e}")
 
