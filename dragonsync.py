@@ -567,7 +567,8 @@ if __name__ == "__main__":
     parser.add_argument("--max-drones", type=int, help="Maximum number of drones to track simultaneously")
     parser.add_argument("--inactivity-timeout", type=float, help="Time in seconds before a drone is considered inactive")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("--mqtt-enabled", action="store_true", help="Enable MQTT publishing of drone JSON")
+    parser.add_argument("--mqtt-enabled", action="store_true", default=None,
+                    help="Enable MQTT publishing of drone JSON (overrides config if set)")
     parser.add_argument("--mqtt-host", type=str, help="MQTT broker host")
     parser.add_argument("--mqtt-port", type=int, help="MQTT broker port")
     parser.add_argument("--mqtt-topic", type=str, help="MQTT topic for drone messages")
