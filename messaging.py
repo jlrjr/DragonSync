@@ -41,6 +41,13 @@ except ImportError:
     )
     netifaces = None
 
+# Skip this exact IP (SDR link that should not carry multicast)
+SKIP_IFACE_IPS = {"172.31.100.1"}
+
+def _is_docker_iface(name: str) -> bool:
+    """Return True for common Docker bridge/veth names; tun/tap are allowed."""
+    return name == "docker0" or name.startswith("br-") or name.startswith("veth")
+
 
 def resolve_interface_to_ip(interface: str) -> Optional[str]:
     """
@@ -121,11 +128,22 @@ class CotMessenger:
                 if self.multicast_interface == "0.0.0.0":
                     if netifaces:
                         for iface in netifaces.interfaces():
+                            # Skip docker-style interfaces by name (docker0/br-*/veth*)
+                            if _is_docker_iface(iface):
+                                logger.debug(f"Skipping multicast TX on docker-like iface '{iface}'")
+                                continue
+
                             addrs = netifaces.ifaddresses(iface)
                             if netifaces.AF_INET in addrs:
                                 for addr_info in addrs[netifaces.AF_INET]:
                                     ip_addr = addr_info.get("addr")
-                                    if ip_addr and not ip_addr.startswith("169.254"):  # Skip link-local
+                                    # Keep original behavior; skip link-local only
+                                    if ip_addr and not ip_addr.startswith("169.254"):
+                                        # Skip specific SDR IP(s) if present
+                                        if ip_addr in SKIP_IFACE_IPS:
+                                            logger.debug(f"Skipping multicast TX on iface '{iface}' ip '{ip_addr}' (in SKIP_IFACE_IPS)")
+                                            continue
+
                                         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
                                         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl_packed)
                                         packed_if = socket.inet_aton(ip_addr)
@@ -345,3 +363,4 @@ class CotMessenger:
                 logger.debug("Closed TAK UDP client.")
             except Exception as e:
                 logger.error(f"Error closing TAK UDP client: {e}")
+
