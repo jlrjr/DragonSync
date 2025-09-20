@@ -361,7 +361,7 @@ class MqttSink:
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
-            "name": "ID",
+            "name": f"{drone_id}",
         }
 
         def sensor(uid_suffix: str, name: str, template: str, unit: Optional[str] = None,
@@ -418,7 +418,7 @@ class MqttSink:
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
-            "name": "ID",
+            "name": f"{drone_id}",
         }
         cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
         state_topic = f"{attr_topic}/state"
