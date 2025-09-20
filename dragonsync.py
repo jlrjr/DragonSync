@@ -650,19 +650,20 @@ if __name__ == "__main__":
         "mqtt_host": args.mqtt_host if hasattr(args, "mqtt_host") and args.mqtt_host is not None else get_str(config_values.get("mqtt_host", "127.0.0.1")),
         "mqtt_port": args.mqtt_port if hasattr(args, "mqtt_port") and args.mqtt_port is not None else get_int(config_values.get("mqtt_port", 1883)),
         "mqtt_topic": args.mqtt_topic if hasattr(args, "mqtt_topic") and args.mqtt_topic is not None else get_str(config_values.get("mqtt_topic", "wardragon/drones")),
-         "mqtt_username": args.mqtt_username if hasattr(args, "mqtt_username") and args.mqtt_username is not None else get_str(config_values.get("mqtt_username")),
+        "mqtt_username": args.mqtt_username if hasattr(args, "mqtt_username") and args.mqtt_username is not None else get_str(config_values.get("mqtt_username")),
         "mqtt_password": args.mqtt_password if hasattr(args, "mqtt_password") and args.mqtt_password is not None else get_str(config_values.get("mqtt_password")),
         "mqtt_tls": args.mqtt_tls if hasattr(args, "mqtt_tls") and args.mqtt_tls is not None else get_bool(config_values.get("mqtt_tls", False)),
         "mqtt_ca_file": args.mqtt_ca_file if hasattr(args, "mqtt_ca_file") and args.mqtt_ca_file is not None else get_str(config_values.get("mqtt_ca_file")),
         "mqtt_certfile": args.mqtt_certfile if hasattr(args, "mqtt_certfile") and args.mqtt_certfile is not None else get_str(config_values.get("mqtt_certfile")),
         "mqtt_keyfile": args.mqtt_keyfile if hasattr(args, "mqtt_keyfile") and args.mqtt_keyfile is not None else get_str(config_values.get("mqtt_keyfile")),
         "mqtt_tls_insecure": args.mqtt_tls_insecure if hasattr(args, "mqtt_tls_insecure") and args.mqtt_tls_insecure is not None else get_bool(config_values.get("mqtt_tls_insecure", False)),
-        "mqtt_per_drone_enabled": args.mqtt_per_drone_enabledxif hasattr(args, "mqtt_per_drone_enabled") and args.mqtt_per_drone_enabled is not None else get_bool(config_values.get("mqtt_per_drone_enabled", False)),
+        "mqtt_retain": args.mqtt_retain if hasattr(args, "mqtt_retain") and args.mqtt_retain is not None else get_bool(config_values.get("mqtt_retain", True)),
+        "mqtt_per_drone_enabled": args.mqtt_per_drone_enabled if hasattr(args, "mqtt_per_drone_enabled") and args.mqtt_per_drone_enabled is not None else get_bool(config_values.get("mqtt_per_drone_enabled", False)),
         "mqtt_per_drone_base": args.mqtt_per_drone_base if hasattr(args, "mqtt_per_drone_base") and args.mqtt_per_drone_base is not None else get_str(config_values.get("mqtt_per_drone_base", "wardragon/drone")),
         "mqtt_ha_enabled": args.mqtt_ha_enabled if hasattr(args, "mqtt_ha_enabled") and args.mqtt_ha_enabled is not None else get_bool(config_values.get("mqtt_ha_enabled", False)),
-        "mqtt_ha_prefix": args.mqtt_ha_prefif if hasattr(args, "mqtt_ha_prefix") and args.mqtt_ha_prefix is not None else get_str(config_values.get("mqtt_ha_prefix", "homeassistant")),
+        "mqtt_ha_prefix": args.mqtt_ha_prefix if hasattr(args, "mqtt_ha_prefix") and args.mqtt_ha_prefix is not None else get_str(config_values.get("mqtt_ha_prefix", "homeassistant")),
         "mqtt_ha_device_base": args.mqtt_ha_device_base if hasattr(args, "mqtt_ha_device_base") and args.mqtt_ha_device_base is not None else get_str(config_values.get("mqtt_ha_device_base", "wardragon_drone")),
-        
+
         # ---- Lattice (optional) config block ----
         "lattice_enabled": args.lattice_enabled or get_bool(config_values.get("lattice_enabled"), False),
         # Environment (Authorization) token
