@@ -39,9 +39,9 @@ import os
 import zmq
 import json
 try:
-    import paho.mqtt.client as mqtt
-except ImportError:
-    mqtt = None
+    from mqtt_sink import MqttSink
+except Exception:
+    MqttSink = None
 
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.hazmat.primitives import serialization
@@ -223,42 +223,57 @@ def zmq_to_cot(
     # Start receiver if enabled
     cot_messenger.start_receiver()
 
-    # Initialize DroneManager with CotMessenger
-    # If your DroneManager supports extra_sinks, use it. If not, fall back safely.
+    # ---- Build sinks list (Lattice + MQTT) ----
     extra_sinks = []
+
+    # Lattice (optional; already created above)
     if lattice_sink is not None:
         extra_sinks.append(lattice_sink)
-    try:
-        drone_manager = DroneManager(
-            max_drones=max_drones,
-            rate_limit=rate_limit,
-            inactivity_timeout=inactivity_timeout,
-            cot_messenger=cot_messenger,
-            mqtt_enabled=config["mqtt_enabled"],
-            mqtt_host=config["mqtt_host"],
-            mqtt_port=config["mqtt_port"],
-            mqtt_topic=config["mqtt_topic"],
-            mqtt_username=config.get("mqtt_username"),
-            mqtt_password=config.get("mqtt_password"),
-            mqtt_tls=config.get("mqtt_tls", False),
-            mqtt_ca_file=config.get("mqtt_ca_file"),
-            mqtt_certfile=config.get("mqtt_certfile"),
-            mqtt_keyfile=config.get("mqtt_keyfile"),
-            mqtt_tls_insecure=config.get("mqtt_tls_insecure", False),
-            extra_sinks=extra_sinks,  # may raise TypeError on older manager.py
-        )
-    except TypeError:
-        # Older manager.py without extra_sinks parameter
-        drone_manager = DroneManager(
-            max_drones=max_drones,
-            rate_limit=rate_limit,
-            inactivity_timeout=inactivity_timeout,
-            cot_messenger=cot_messenger,
-            mqtt_enabled=config["mqtt_enabled"],
-            mqtt_host=config["mqtt_host"],
-            mqtt_port=config["mqtt_port"],
-            mqtt_topic=config["mqtt_topic"],
-        )
+
+    # MQTT sink (optional)
+    mqtt_sink = None
+    if config.get("mqtt_enabled"):
+        if MqttSink is None:
+            logger.critical("mqtt_enabled=true but mqtt_sink.py is missing or failed to import.")
+        else:
+            try:
+                mqtt_sink = MqttSink(
+                    host=config.get("mqtt_host", "127.0.0.1"),
+                    port=int(config.get("mqtt_port", 1883)),
+                    username=(config.get("mqtt_username") or None),
+                    password=(config.get("mqtt_password") or None),
+                    tls=bool(config.get("mqtt_tls", False)),
+                    ca_file=(config.get("mqtt_ca_file") or None),
+                    certfile=(config.get("mqtt_certfile") or None),
+                    keyfile=(config.get("mqtt_keyfile") or None),
+                    tls_insecure=bool(config.get("mqtt_tls_insecure", False)),
+
+                    aggregate_topic=config.get("mqtt_topic", "wardragon/drones"),
+                    retain_state=bool(config.get("mqtt_retain", True)),
+
+                    per_drone_enabled=bool(config.get("mqtt_per_drone_enabled", False)),
+                    per_drone_base=config.get("mqtt_per_drone_base", "wardragon/drone"),
+
+                    ha_enabled=bool(config.get("mqtt_ha_enabled", False)),
+                    ha_prefix=config.get("mqtt_ha_prefix", "homeassistant"),
+                    ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
+                )
+                extra_sinks.append(mqtt_sink)
+                logger.info("MQTT sink enabled (aggregate=%s, per_drone=%s, HA=%s)",
+                            config.get("mqtt_topic", "wardragon/drones"),
+                            bool(config.get("mqtt_per_drone_enabled", False)),
+                            bool(config.get("mqtt_ha_enabled", False)))
+            except Exception as e:
+                logger.exception("Failed to initialize MQTT sink: %s", e)
+
+    # Initialize DroneManager with CotMessenger (no legacy MQTT args)
+    drone_manager = DroneManager(
+        max_drones=max_drones,
+        rate_limit=rate_limit,
+        inactivity_timeout=inactivity_timeout,
+        cot_messenger=cot_messenger,
+        extra_sinks=extra_sinks,
+    )
 
     def signal_handler(sig, frame):
         """Handles signal interruptions for graceful shutdown."""
@@ -275,7 +290,10 @@ def zmq_to_cot(
         if cot_messenger:
             cot_messenger.close()
         if drone_manager:
-            drone_manager.close()
+            try:
+                drone_manager.close()
+            except Exception:
+                pass
         logger.info("Cleaned up ZMQ resources")
         sys.exit(0)
 
@@ -519,6 +537,13 @@ def zmq_to_cot(
                     except Exception as e:
                         logger.warning(f"Lattice publish_system failed: {e}")
 
+                # Optional publish to MQTT sink if present
+                if mqtt_sink is not None and hasattr(mqtt_sink, "publish_system"):
+                    try:
+                        mqtt_sink.publish_system(status_message)
+                    except Exception as e:
+                        logger.warning(f"MQTT publish_system failed: {e}")
+
             # Send drone updates via DroneManager
             try:
                 drone_manager.send_updates()
@@ -540,6 +565,12 @@ def zmq_to_cot(
         try:
             if not context.closed:
                 context.term()
+        except Exception:
+            pass
+        # ensure sinks shut down
+        try:
+            if 'drone_manager' in locals() and drone_manager:
+                drone_manager.close()
         except Exception:
             pass
         sys.exit(1)
@@ -579,6 +610,18 @@ if __name__ == "__main__":
     parser.add_argument("--mqtt-certfile", type=str, help="Path to client certificate for MQTT TLS (optional)")
     parser.add_argument("--mqtt-keyfile", type=str, help="Path to client key for MQTT TLS (optional)")
     parser.add_argument("--mqtt-tls-insecure", action="store_true", help="(UNSAFE) Skip MQTT TLS hostname/chain verification")
+    parser.add_argument("--mqtt-retain", action="store_true", default=None,
+                        help="Retain published state topics (default: true if unset)")
+    parser.add_argument("--mqtt-per-drone-enabled", action="store_true", default=None,
+                        help="Publish one message per drone to base/<drone_id>")
+    parser.add_argument("--mqtt-per-drone-base", type=str,
+                        help="Base topic for per-drone messages (default: wardragon/drone)")
+    parser.add_argument("--mqtt-ha-enabled", action="store_true", default=None,
+                        help="Enable Home Assistant MQTT Discovery")
+    parser.add_argument("--mqtt-ha-prefix", type=str,
+                        help="HA discovery prefix (default: homeassistant)")
+    parser.add_argument("--mqtt-ha-device-base", type=str,
+                        help="Base used for HA device unique_id (default: wardragon_drone)")
     # ---- Lattice (optional) ----
     parser.add_argument("--lattice-enabled", action="store_true", help="Enable publishing to Lattice")
     parser.add_argument("--lattice-token", type=str, help="Lattice environment token (or env LATTICE_TOKEN / ENVIRONMENT_TOKEN)")
@@ -640,14 +683,20 @@ if __name__ == "__main__":
         "mqtt_host": args.mqtt_host if hasattr(args, "mqtt_host") and args.mqtt_host is not None else get_str(config_values.get("mqtt_host", "127.0.0.1")),
         "mqtt_port": args.mqtt_port if hasattr(args, "mqtt_port") and args.mqtt_port is not None else get_int(config_values.get("mqtt_port", 1883)),
         "mqtt_topic": args.mqtt_topic if hasattr(args, "mqtt_topic") and args.mqtt_topic is not None else get_str(config_values.get("mqtt_topic", "wardragon/drones")),
-         "mqtt_username": args.mqtt_username if hasattr(args, "mqtt_username") and args.mqtt_username is not None else get_str(config_values.get("mqtt_username")),
+        "mqtt_username": args.mqtt_username if hasattr(args, "mqtt_username") and args.mqtt_username is not None else get_str(config_values.get("mqtt_username")),
         "mqtt_password": args.mqtt_password if hasattr(args, "mqtt_password") and args.mqtt_password is not None else get_str(config_values.get("mqtt_password")),
         "mqtt_tls": args.mqtt_tls if hasattr(args, "mqtt_tls") and args.mqtt_tls is not None else get_bool(config_values.get("mqtt_tls", False)),
         "mqtt_ca_file": args.mqtt_ca_file if hasattr(args, "mqtt_ca_file") and args.mqtt_ca_file is not None else get_str(config_values.get("mqtt_ca_file")),
         "mqtt_certfile": args.mqtt_certfile if hasattr(args, "mqtt_certfile") and args.mqtt_certfile is not None else get_str(config_values.get("mqtt_certfile")),
         "mqtt_keyfile": args.mqtt_keyfile if hasattr(args, "mqtt_keyfile") and args.mqtt_keyfile is not None else get_str(config_values.get("mqtt_keyfile")),
         "mqtt_tls_insecure": args.mqtt_tls_insecure if hasattr(args, "mqtt_tls_insecure") and args.mqtt_tls_insecure is not None else get_bool(config_values.get("mqtt_tls_insecure", False)),
-        
+        "mqtt_retain": args.mqtt_retain if hasattr(args, "mqtt_retain") and args.mqtt_retain is not None else get_bool(config_values.get("mqtt_retain", True)),
+        "mqtt_per_drone_enabled": args.mqtt_per_drone_enabled if hasattr(args, "mqtt_per_drone_enabled") and args.mqtt_per_drone_enabled is not None else get_bool(config_values.get("mqtt_per_drone_enabled", False)),
+        "mqtt_per_drone_base": args.mqtt_per_drone_base if hasattr(args, "mqtt_per_drone_base") and args.mqtt_per_drone_base is not None else get_str(config_values.get("mqtt_per_drone_base", "wardragon/drone")),
+        "mqtt_ha_enabled": args.mqtt_ha_enabled if hasattr(args, "mqtt_ha_enabled") and args.mqtt_ha_enabled is not None else get_bool(config_values.get("mqtt_ha_enabled", False)),
+        "mqtt_ha_prefix": args.mqtt_ha_prefix if hasattr(args, "mqtt_ha_prefix") and args.mqtt_ha_prefix is not None else get_str(config_values.get("mqtt_ha_prefix", "homeassistant")),
+        "mqtt_ha_device_base": args.mqtt_ha_device_base if hasattr(args, "mqtt_ha_device_base") and args.mqtt_ha_device_base is not None else get_str(config_values.get("mqtt_ha_device_base", "wardragon_drone")),
+
         # ---- Lattice (optional) config block ----
         "lattice_enabled": args.lattice_enabled or get_bool(config_values.get("lattice_enabled"), False),
         # Environment (Authorization) token
@@ -673,9 +722,6 @@ if __name__ == "__main__":
         "lattice_wd_rate": args.lattice_wd_rate if args.lattice_wd_rate is not None else get_float(config_values.get("lattice_wd_rate", 0.2)),
     }
 
-    if config["mqtt_enabled"] and mqtt is None:
-        logger.critical("MQTT support requested, but paho-mqtt is not installed!")
-        sys.exit(1)
     
     # Validate configuration
     try:

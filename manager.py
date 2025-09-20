@@ -24,233 +24,156 @@ SOFTWARE.
 
 import time
 from collections import deque
-from typing import Optional, List
+from typing import Optional, List, Dict
 import logging
 import math
-import json
-try:
-    import paho.mqtt.client as mqtt
-except ImportError:
-    mqtt = None
 
 from drone import Drone
 from messaging import CotMessenger
 
 logger = logging.getLogger(__name__)
 
+
 class DroneManager:
-    """Manages a collection of drones and handles their updates."""
+    """Manages a collection of drones and handles their updates.
+
+    All outputs (MQTT/HA/Lattice/etc.) are delegated to objects passed via
+    `extra_sinks`. A sink may implement:
+      - publish_drone(drone)
+      - publish_pilot(drone_id, lat, lon, alt)
+      - publish_home(drone_id,  lat, lon, alt)
+      - close()
+    """
 
     def __init__(
         self,
-        max_drones=30,
-        rate_limit=1.0,
-        inactivity_timeout=60.0,
+        max_drones: int = 30,
+        rate_limit: float = 1.0,
+        inactivity_timeout: float = 60.0,
         cot_messenger: Optional[CotMessenger] = None,
-        mqtt_enabled=False,
-        mqtt_host='127.0.0.1',
-        mqtt_port=1883,
-        mqtt_topic='wardragon/drones',
-        # --- Enhancement: MQTT auth/TLS options ---
-        mqtt_username: Optional[str] = None,
-        mqtt_password: Optional[str] = None,
-        mqtt_tls: bool = False,
-        mqtt_ca_file: Optional[str] = None,
-        mqtt_certfile: Optional[str] = None,
-        mqtt_keyfile: Optional[str] = None,
-        mqtt_tls_insecure: bool = False,
-        # ------------------------------------------
-        extra_sinks: Optional[List] = None
+        extra_sinks: Optional[List] = None,
     ):
-        self.drones = deque(maxlen=max_drones)
-        self.drone_dict = {}
+        self.drones: deque[str] = deque(maxlen=max_drones)
+        self.drone_dict: Dict[str, Drone] = {}
         self.rate_limit = rate_limit
         self.inactivity_timeout = inactivity_timeout
         self.cot_messenger = cot_messenger
-        self.mqtt_enabled = mqtt_enabled
-        self.mqtt_topic = mqtt_topic
-        self.mqtt_client = None
-        self.extra_sinks = extra_sinks or []
-
-        if self.mqtt_enabled:
-            if mqtt is None:
-                logger.critical("MQTT support requested, but paho-mqtt is not installed!")
-                raise ImportError("paho-mqtt required for MQTT support")
-
-            # Create client
-            self.mqtt_client = mqtt.Client()
-
-            # Route paho internal logs to our logger when available (nice during -d)
-            try:
-                self.mqtt_client.enable_logger(logger)  # paho >=1.6
-            except Exception:
-                # Older paho may not have enable_logger; fall back to on_log callback below
-                pass
-
-            # Callbacks for connection lifecycle and publish acks
-            def _on_connect(c, u, flags, rc, props=None):
-                # rc==0 means success
-                logger.info("MQTT connected rc=%s flags=%s", rc, flags)
-
-            def _on_disconnect(c, u, rc, props=None):
-                logger.warning("MQTT disconnected rc=%s", rc)
-
-            def _on_publish(c, u, mid):
-                logger.debug("MQTT published mid=%s", mid)
-
-            def _on_log(c, u, level, buf):
-                # Visible at DEBUG level; shows socket/TLS/errors, etc.
-                logger.debug("MQTT on_log: %s", buf)
-
-            self.mqtt_client.on_connect = _on_connect
-            self.mqtt_client.on_disconnect = _on_disconnect
-            self.mqtt_client.on_publish = _on_publish
-            self.mqtt_client.on_log = _on_log
-
-            # Username/password over plain TCP (TLS optional below)
-            if mqtt_username is not None:
-                self.mqtt_client.username_pw_set(mqtt_username, mqtt_password)
-
-            # TLS (kept as-is; only activates if you pass mqtt_tls=True)
-            if mqtt_tls:
-                try:
-                    self.mqtt_client.tls_set(
-                        ca_certs=mqtt_ca_file,
-                        certfile=mqtt_certfile,
-                        keyfile=mqtt_keyfile,
-                    )
-                    self.mqtt_client.tls_insecure_set(bool(mqtt_tls_insecure))
-                except Exception as e:
-                    logger.critical(f"Failed to configure MQTT TLS: {e}")
-                    raise
-
-            # Connect and start background loop
-            try:
-                self.mqtt_client.connect(mqtt_host, int(mqtt_port), keepalive=60)
-                self.mqtt_client.loop_start()
-
-                # Briefly wait to confirm connection (if supported by this paho version)
-                connected = False
-                deadline = time.time() + 3.0
-                is_conn = getattr(self.mqtt_client, "is_connected", None)
-                while time.time() < deadline and callable(is_conn) and not self.mqtt_client.is_connected():
-                    time.sleep(0.05)
-                if callable(is_conn):
-                    connected = self.mqtt_client.is_connected()
-
-                if connected:
-                    logger.info(
-                        "MQTT: connected to %s:%s (username=%s)",
-                        mqtt_host, mqtt_port, "<set>" if mqtt_username else "<empty>"
-                    )
-                else:
-                    logger.warning("MQTT: no connect confirmation within timeout; check broker/creds/port")
-            except Exception as e:
-                logger.critical(f"Failed to connect to MQTT broker: {e}")
-                self.mqtt_enabled = False
+        self.extra_sinks = list(extra_sinks or [])
 
     def update_or_add_drone(self, drone_id: str, drone_data: Drone):
         """Updates an existing drone or adds a new one to the collection."""
         if drone_id not in self.drone_dict:
             if len(self.drones) >= self.drones.maxlen:
                 oldest_drone_id = self.drones.popleft()
-                del self.drone_dict[oldest_drone_id]
+                self.drone_dict.pop(oldest_drone_id, None)
                 logger.debug(f"Removed oldest drone: {oldest_drone_id}")
             self.drones.append(drone_id)
             self.drone_dict[drone_id] = drone_data
             drone_data.last_sent_time = 0.0
             logger.debug(f"Added new drone: {drone_id}")
         else:
+            # Same as before, but now also track freq
             self.drone_dict[drone_id].update(
-                lat=drone_data.lat, lon=drone_data.lon, speed=drone_data.speed,
-                vspeed=drone_data.vspeed, alt=drone_data.alt, height=drone_data.height,
-                pilot_lat=drone_data.pilot_lat, pilot_lon=drone_data.pilot_lon,
-                description=drone_data.description, mac=drone_data.mac, rssi=drone_data.rssi
+                lat=drone_data.lat,
+                lon=drone_data.lon,
+                speed=drone_data.speed,
+                vspeed=drone_data.vspeed,
+                alt=drone_data.alt,
+                height=drone_data.height,
+                pilot_lat=drone_data.pilot_lat,
+                pilot_lon=drone_data.pilot_lon,
+                description=drone_data.description,
+                mac=drone_data.mac,
+                rssi=drone_data.rssi,
+                freq=getattr(drone_data, "freq", None),
             )
             logger.debug(f"Updated drone: {drone_id}")
 
     def send_updates(self):
-        """Sends regular CoT updates to the TAK server or multicast address."""
-        current_time = time.time()
-        drones_to_remove = []
+        """Sends rate-limited CoT updates and dispatches the full Drone to sinks."""
+        now = time.time()
+        to_remove: List[str] = []
 
         for drone_id in list(self.drones):
             drone = self.drone_dict[drone_id]
-            time_since_update = current_time - drone.last_update_time
+            age = now - drone.last_update_time
 
-            if time_since_update > self.inactivity_timeout:
-                drones_to_remove.append(drone_id)
-                logger.debug(f"Drone {drone_id} inactive for {time_since_update:.2f}s. Removing from tracking.")
+            if age > self.inactivity_timeout:
+                to_remove.append(drone_id)
+                logger.debug("Drone %s inactive for %.2fs. Removing.", drone_id, age)
                 continue
 
+            # position delta for diagnostics
             delta_lat = drone.lat - drone.last_sent_lat
             delta_lon = drone.lon - drone.last_sent_lon
-            position_change = math.sqrt(delta_lat ** 2 + delta_lon ** 2)
+            position_change = math.hypot(delta_lat, delta_lon)
 
-            if current_time - drone.last_sent_time >= self.rate_limit:
-                cot_xml = drone.to_cot_xml(
-                    stale_offset=self.inactivity_timeout - time_since_update
-                )
-                if self.cot_messenger:
-                    self.cot_messenger.send_cot(cot_xml)
+            if (now - drone.last_sent_time) >= self.rate_limit:
+                stale_offset = self.inactivity_timeout - age
 
-                if self.mqtt_enabled and self.mqtt_client:
+                # 1) CoT main event
+                try:
+                    cot_xml = drone.to_cot_xml(stale_offset=stale_offset)
+                    if self.cot_messenger and cot_xml:
+                        self.cot_messenger.send_cot(cot_xml)
+                except Exception as e:
+                    logger.warning("CoT send failed for %s: %s", drone_id, e)
+
+                # 2) Sinks (MQTT/HA/Lattice/etc.)
+                for s in self.extra_sinks:
                     try:
-                        payload = json.dumps(vars(drone), default=str)
-                        logger.debug(
-                            "MQTT publish topic=%s bytes=%d id=%s",
-                            self.mqtt_topic, len(payload), getattr(drone, "id", "")
-                        )
-                        info = self.mqtt_client.publish(self.mqtt_topic, payload)
-                        # Surface non-success codes (rare on qos=0 but helpful)
-                        if info.rc != mqtt.MQTT_ERR_SUCCESS:
-                            logger.warning("MQTT publish returned rc=%s", info.rc)
+                        if hasattr(s, "publish_drone"):
+                            s.publish_drone(drone)
+                        if (getattr(drone, "pilot_lat", 0.0) or getattr(drone, "pilot_lon", 0.0)) and hasattr(s, "publish_pilot"):
+                            s.publish_pilot(drone_id, drone.pilot_lat, drone.pilot_lon, 0.0)
+                        if (getattr(drone, "home_lat", 0.0) or getattr(drone, "home_lon", 0.0)) and hasattr(s, "publish_home"):
+                            s.publish_home(drone_id, drone.home_lat, drone.home_lon, 0.0)
                     except Exception as e:
-                        logger.warning(f"Failed to publish to MQTT: {e}")
+                        logger.warning("Sink publish failed for %s (sink=%s): %s", drone_id, s, e)
+
+                # 3) Pilot/Home CoT
+                try:
+                    if drone.pilot_lat != 0.0 or drone.pilot_lon != 0.0:
+                        pilot_xml = drone.to_pilot_cot_xml(stale_offset=stale_offset)
+                        if self.cot_messenger and pilot_xml:
+                            self.cot_messenger.send_cot(pilot_xml)
+                    if drone.home_lat != 0.0 or drone.home_lon != 0.0:
+                        home_xml = drone.to_home_cot_xml(stale_offset=stale_offset)
+                        if self.cot_messenger and home_xml:
+                            self.cot_messenger.send_cot(home_xml)
+                except Exception as e:
+                    logger.warning("Pilot/Home CoT send failed for %s: %s", drone_id, e)
 
                 drone.last_sent_lat = drone.lat
                 drone.last_sent_lon = drone.lon
-                drone.last_sent_time = current_time
-                logger.debug(f"Sent CoT update for drone {drone_id} (position change: {position_change:.8f}).")
+                drone.last_sent_time = now
+                logger.debug(
+                    "Sent update for drone %s (position change: %.8f).",
+                    drone_id, position_change
+                )
 
-                # ── Minimal change: give sinks the whole Drone object so they see ALL fields ──
-                if self.extra_sinks:
-                    for s in self.extra_sinks:
-                        try:
-                            s.publish_drone(drone)
-                            # optional pilot/home pins if the sink supports them (keep 4-arg form)
-                            if (getattr(drone, "pilot_lat", 0.0) or getattr(drone, "pilot_lon", 0.0)) and hasattr(s, "publish_pilot"):
-                                s.publish_pilot(drone_id, drone.pilot_lat, drone.pilot_lon, 0.0)
-                            if (getattr(drone, "home_lat", 0.0) or getattr(drone, "home_lon", 0.0)) and hasattr(s, "publish_home"):
-                                s.publish_home(drone_id, drone.home_lat, drone.home_lon, 0.0)
-                        except Exception as e:
-                            logger.warning(f"Extra sink publish failed for {drone_id}: {e}")
+        # Housekeeping: drop inactive drones
+        for drone_id in to_remove:
+            for s in self.extra_sinks:
+                try:
+                    if hasattr(s, "mark_inactive"):
+                        s.mark_inactive(drone_id)
+                except Exception as e:
+                    logger.warning("Sink mark_inactive failed for %s (sink=%s): %s", drone_id, s, e)
 
-                if drone.pilot_lat != 0.0 or drone.pilot_lon != 0.0:
-                    pilot_xml = drone.to_pilot_cot_xml(
-                        stale_offset=self.inactivity_timeout - time_since_update
-                    )
-                    if self.cot_messenger:
-                        self.cot_messenger.send_cot(pilot_xml)
-                    logger.debug(f"Sent pilot CoT update for drone {drone_id}.")
+            try:
+                self.drones.remove(drone_id)
+            except ValueError:
+                pass
+            self.drone_dict.pop(drone_id, None)
+            logger.debug("Removed drone: %s", drone_id)
 
-                if drone.home_lat != 0.0 or drone.home_lon != 0.0:
-                    home_xml = drone.to_home_cot_xml(
-                        stale_offset=self.inactivity_timeout - time_since_update
-                    )
-                    if self.cot_messenger:
-                        self.cot_messenger.send_cot(home_xml)
-                    logger.debug(f"Sent home CoT update for drone {drone_id}.")
-
-        for drone_id in drones_to_remove:
-            self.drones.remove(drone_id)
-            del self.drone_dict[drone_id]
-            logger.debug(f"Removed drone: {drone_id}")
 
     def close(self):
-        if self.mqtt_enabled and self.mqtt_client:
+        """Give every sink a chance to cleanup (e.g., stop MQTT loops, flush, etc.)."""
+        for s in self.extra_sinks:
             try:
-                self.mqtt_client.loop_stop()
-                self.mqtt_client.disconnect()
+                if hasattr(s, "close"):
+                    s.close()
             except Exception as e:
-                logger.warning(f"Error shutting down MQTT client: {e}")
+                logger.warning("Error shutting down sink %s: %s", s, e)
