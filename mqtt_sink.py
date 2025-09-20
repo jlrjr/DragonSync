@@ -236,6 +236,24 @@ class MqttSink:
         except Exception as e:
             _log.warning("MqttSink disconnect error: %s", e)
 
+    # NEW: allow manager to mark trackers 'not_home' when a drone ages out
+    def mark_inactive(self, drone_id: str) -> None:
+        """
+        Mark the drone and its pilot/home trackers as 'not_home' in HA.
+        Safe to call even if HA discovery wasn't used; it will just publish.
+        """
+        base = self._per_drone_topic(str(drone_id))
+        topics = [
+            f"{base}/state",        # drone device_tracker
+            f"{base}/pilot_state",  # pilot device_tracker
+            f"{base}/home_state",   # home device_tracker
+        ]
+        for t in topics:
+            try:
+                self.client.publish(t, "not_home", qos=self.qos, retain=True)
+            except Exception as e:
+                _log.warning("MqttSink mark_inactive publish failed for %s: %s", t, e)
+
     # ────────────────────────────────────────────────
     # Internals
     # ────────────────────────────────────────────────
