@@ -120,9 +120,31 @@ class MqttSink:
                 _log.critical("MqttSink TLS configuration failed: %s", e)
                 raise
 
+        # NOTE: on_connect repushes HA discovery + last known state for determinism after restarts
         def _on_connect(c, u, flags, rc, props=None):
             if rc == 0:
                 _log.info("MqttSink connected to %s:%s", host, port)
+                try:
+                    # Clear discovery-guard so we advertise again on reconnect
+                    self._seen_for_ha.clear()
+                    # Re-publish HA discovery and last state for all cached drones
+                    if self.ha_enabled and self.per_drone_enabled and self._state_cache:
+                        for drone_id, state in self._state_cache.items():
+                            st = self._per_drone_topic(drone_id)
+                            try:
+                                self._publish_ha_device_tracker(drone_id, st, state)
+                                self._publish_ha_sensors(drone_id, st, state)
+                            except Exception as e:
+                                _log.warning("Reconnect HA discovery failed for %s: %s", drone_id, e)
+                            # Re-publish the most recent per-drone state (retained)
+                            try:
+                                payload = json.dumps(state, default=_json_default)
+                                info = self.client.publish(st, payload, qos=self.qos, retain=self.retain_state)
+                                self._warn_if_publish_failed(info)
+                            except Exception as e:
+                                _log.warning("Reconnect per-drone state publish failed for %s: %s", drone_id, e)
+                except Exception as e:
+                    _log.warning("on_connect refresh failed: %s", e)
             else:
                 _log.warning("MqttSink connect rc=%s", rc)
 
@@ -261,7 +283,7 @@ class MqttSink:
         freq = g("freq", None)
         freq_mhz = _fmt_freq_mhz(freq)
 
-        # NEW: mirror keys for HA device_tracker and optional accuracy
+        # Optional horizontal accuracy (meters) if your parser provides it
         horiz_acc = g("horizontal_accuracy", 0)
 
         state = {
@@ -272,10 +294,10 @@ class MqttSink:
             "lat": _f(g("lat", 0.0)),
             "lon": _f(g("lon", 0.0)),
 
-            # NEW: HA device_tracker expects these names for map placement
+            # HA device_tracker attributes for map placement
             "latitude": _f(g("lat", 0.0)),
             "longitude": _f(g("lon", 0.0)),
-            "gps_accuracy": _f(horiz_acc),  # optional
+            "gps_accuracy": _f(horiz_acc),
 
             "alt": _f(g("alt", 0.0)),
             "height": _f(g("height", 0.0)),
@@ -314,9 +336,8 @@ class MqttSink:
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
-            "name": f"Drone {drone_id}",
-            "manufacturer": "AlphaFox",
-            "model": sample.get("description") or "DragonSync",
+            "name": f"{drone_id}",                 # clean label: just the ID
+            "model": sample.get("description") or "Remote ID",
         }
 
         def sensor(uid_suffix: str, name: str, template: str, unit: Optional[str] = None,
@@ -339,30 +360,29 @@ class MqttSink:
             self.client.publish(topic, json.dumps(payload), qos=self.qos, retain=True)
 
         # Core kinematics / position
-        sensor("lat", "Latitude", "{{ value_json.lat | float | default(0) }}", "°", icon="mdi:map-marker")
-        sensor("lon", "Longitude", "{{ value_json.lon | float | default(0) }}", "°", icon="mdi:map-marker")
-        sensor("alt", "Altitude", "{{ value_json.alt | float | default(0) }}", "m", device_class="distance", icon="mdi:map-marker-distance")
-        sensor("speed", "Speed", "{{ value_json.speed | float | default(0) }}", "m/s", device_class="speed", icon="mdi:speedometer")
-        sensor("vspeed", "Vertical Speed", "{{ value_json.vspeed | float | default(0) }}", "m/s", icon="mdi:axis-z-arrow")
-        sensor("height", "AGL", "{{ value_json.height | float | default(0) }}", "m", icon="mdi:altimeter")
-        sensor("dir", "Course", "{{ value_json.direction | float | default(0) }}", "°", icon="mdi:compass")
+        sensor("lat", "Latitude", "{{ value_json.lat | default(0) | float }}", "°", icon="mdi:map-marker")
+        sensor("lon", "Longitude", "{{ value_json.lon | default(0) | float }}", "°", icon="mdi:map-marker")
+        sensor("alt", "Altitude", "{{ value_json.alt | default(0) | float }}", "m", device_class="distance", icon="mdi:map-marker-distance")
+        sensor("speed", "Speed", "{{ value_json.speed | default(0) | float }}", "m/s", device_class="speed", icon="mdi:speedometer")
+        sensor("vspeed", "Vertical Speed", "{{ value_json.vspeed | default(0) | float }}", "m/s", icon="mdi:axis-z-arrow")
+        sensor("height", "AGL", "{{ value_json.height | default(0) | float }}", "m", icon="mdi:altimeter")
+        sensor("dir", "Course", "{{ value_json.direction | default(0) | float }}", "°", icon="mdi:compass")
 
         # Pilot/Home
-        sensor("pilot_lat", "Pilot Latitude", "{{ value_json.pilot_lat | float | default(0) }}", "°", icon="mdi:account")
-        sensor("pilot_lon", "Pilot Longitude", "{{ value_json.pilot_lon | float | default(0) }}", "°", icon="mdi:account")
-        sensor("home_lat", "Home Latitude", "{{ value_json.home_lat | float | default(0) }}", "°", icon="mdi:home")
-        sensor("home_lon", "Home Longitude", "{{ value_json.home_lon | float | default(0) }}", "°", icon="mdi:home")
+        sensor("pilot_lat", "Pilot Latitude", "{{ value_json.pilot_lat | default(0) | float }}", "°", icon="mdi:account")
+        sensor("pilot_lon", "Pilot Longitude", "{{ value_json.pilot_lon | default(0) | float }}", "°", icon="mdi:account")
+        sensor("home_lat", "Home Latitude", "{{ value_json.home_lat | default(0) | float }}", "°", icon="mdi:home")
+        sensor("home_lon", "Home Longitude", "{{ value_json.home_lon | default(0) | float }}", "°", icon="mdi:home")
 
-        # Radio / link
-        sensor("rssi", "Signal (RSSI)", "{{ value_json.rssi | float | default(0) }}", "dBm", device_class="signal_strength", icon="mdi:wifi")
-        sensor("freq", "Radio Freq (MHz)", "{{ value_json.freq_mhz | float(0) }}", "MHz", icon="mdi:radio-tower")
+        # Radio / link (safe default for None)
+        sensor("rssi", "Signal (RSSI)", "{{ value_json.rssi | default(0) | float }}", "dBm", device_class="signal_strength", icon="mdi:wifi")
+        sensor("freq", "Radio Freq (MHz)", "{{ value_json.freq_mhz | default(0) | float }}", "MHz", icon="mdi:radio-tower")
 
-
-        # Metadata (non-numeric; leave device_class empty to keep HA happy)
+        # Metadata (non-numeric; leave device_class empty)
         sensor("ua_type", "UA Type", "{{ value_json.ua_type_name | default('') }}", icon="mdi:airplane")
         sensor("op_id", "Operator ID", "{{ value_json.operator_id | default('') }}", icon="mdi:id-card")
 
-        # A primary "drone" sensor just to show name/description in HA device page
+        # Primary label-only sensor for the device page
         sensor("main", "Drone", "{{ value_json.description | default('Drone') }}", icon="mdi:drone")
 
     def _publish_ha_device_tracker(self, drone_id: str, attr_topic: str, sample: Dict[str, Any]) -> None:
@@ -374,18 +394,19 @@ class MqttSink:
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
+            "name": f"{drone_id}",                 # clean label
             "model": sample.get("description") or "Remote ID",
         }
         cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
         state_topic = f"{attr_topic}/state"
-        
+
         payload = {
             "name": f"{drone_id}",
             "unique_id": base_unique,
             "device": device,
             "source_type": "gps",
-            "state_topic": state_topic,
-            "json_attributes_topic": attr_topic,
+            "state_topic": state_topic,           # textual state (we set 'not_home')
+            "json_attributes_topic": attr_topic,  # lat/lon/etc. are attributes
             "icon": "mdi:drone",
         }
         # Retain discovery + default state
@@ -422,4 +443,3 @@ def _json_default(o):
         return str(o)
     except Exception:
         return None
-
