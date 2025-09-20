@@ -342,8 +342,8 @@ class MqttSink:
         """
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
-            # Minimal device dict (no "name") to avoid UI duplication like "drone-xyz drone-xyz"
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
+            "name": "ID",
         }
 
         def sensor(uid_suffix: str, name: str, template: str, unit: Optional[str] = None,
@@ -399,8 +399,8 @@ class MqttSink:
         """
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
-            # Minimal device record (no "name") to avoid duplicate label in UI
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
+            "name": "ID",
         }
         cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
         state_topic = f"{attr_topic}/state"
