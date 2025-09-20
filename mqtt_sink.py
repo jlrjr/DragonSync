@@ -261,11 +261,22 @@ class MqttSink:
         freq = g("freq", None)
         freq_mhz = _fmt_freq_mhz(freq)
 
+        # NEW: mirror keys for HA device_tracker and optional accuracy
+        horiz_acc = g("horizontal_accuracy", 0)
+
         state = {
             "id": g("id", "unknown"),
             "description": g("description", ""),
+
+            # existing keys used elsewhere
             "lat": _f(g("lat", 0.0)),
             "lon": _f(g("lon", 0.0)),
+
+            # NEW: HA device_tracker expects these names for map placement
+            "latitude": _f(g("lat", 0.0)),
+            "longitude": _f(g("lon", 0.0)),
+            "gps_accuracy": _f(horiz_acc),  # optional
+
             "alt": _f(g("alt", 0.0)),
             "height": _f(g("height", 0.0)),
             "speed": _f(g("speed", 0.0)),
@@ -344,7 +355,8 @@ class MqttSink:
 
         # Radio / link
         sensor("rssi", "Signal (RSSI)", "{{ value_json.rssi | float | default(0) }}", "dBm", device_class="signal_strength", icon="mdi:wifi")
-        sensor("freq", "Radio Freq (MHz)", "{{ value_json.freq_mhz | float(0) }}", "MHz", icon="mdi:radio-tower")
+        # FIXED: safe default then float conversion to avoid warnings when null
+        sensor("freq", "Radio Freq (MHz)", "{{ value_json.freq_mhz | default(0) | float }}", "MHz", icon="mdi:radio-tower")
 
         # Metadata (non-numeric; leave device_class empty to keep HA happy)
         sensor("ua_type", "UA Type", "{{ value_json.ua_type_name | default('') }}", icon="mdi:airplane")
@@ -363,7 +375,7 @@ class MqttSink:
         device = {
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
             "name": f"Drone {drone_id}",
-            "manufacturer": "AlphaFox",
+            "manufacturer": "WarDragon",
             "model": sample.get("description") or "DragonSync",
         }
         cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
@@ -375,7 +387,7 @@ class MqttSink:
             "device": device,
             "source_type": "gps",
             "state_topic": state_topic,           # textual state (we set 'not_home')
-            "json_attributes_topic": attr_topic,  # lat/lon/etc. are attributes
+            "json_attributes_topic": attr_topic,  # lat/longitude/etc. in attributes
             "icon": "mdi:drone",
         }
         # Retain discovery + default state
@@ -412,3 +424,4 @@ def _json_default(o):
         return str(o)
     except Exception:
         return None
+
