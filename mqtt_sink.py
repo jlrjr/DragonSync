@@ -53,6 +53,7 @@ class MqttSink:
       - HA discovery (optional):
           * rich per-drone sensors (lat/lon/alt/speed/etc.)
           * a device_tracker per drone for a clean Map dot
+          * OPTIONAL extra device_trackers for pilot/home dots
       - Lightweight in-memory state cache so pilot/home updates merge cleanly.
     """
 
@@ -120,31 +121,9 @@ class MqttSink:
                 _log.critical("MqttSink TLS configuration failed: %s", e)
                 raise
 
-        # NOTE: on_connect repushes HA discovery + last known state for determinism after restarts
         def _on_connect(c, u, flags, rc, props=None):
             if rc == 0:
                 _log.info("MqttSink connected to %s:%s", host, port)
-                try:
-                    # Clear discovery-guard so we advertise again on reconnect
-                    self._seen_for_ha.clear()
-                    # Re-publish HA discovery and last state for all cached drones
-                    if self.ha_enabled and self.per_drone_enabled and self._state_cache:
-                        for drone_id, state in self._state_cache.items():
-                            st = self._per_drone_topic(drone_id)
-                            try:
-                                self._publish_ha_device_tracker(drone_id, st, state)
-                                self._publish_ha_sensors(drone_id, st, state)
-                            except Exception as e:
-                                _log.warning("Reconnect HA discovery failed for %s: %s", drone_id, e)
-                            # Re-publish the most recent per-drone state (retained)
-                            try:
-                                payload = json.dumps(state, default=_json_default)
-                                info = self.client.publish(st, payload, qos=self.qos, retain=self.retain_state)
-                                self._warn_if_publish_failed(info)
-                            except Exception as e:
-                                _log.warning("Reconnect per-drone state publish failed for %s: %s", drone_id, e)
-                except Exception as e:
-                    _log.warning("on_connect refresh failed: %s", e)
             else:
                 _log.warning("MqttSink connect rc=%s", rc)
 
@@ -205,6 +184,20 @@ class MqttSink:
         }
         self._merge_and_publish(drone_id, patch)
 
+        # Also feed the pilot device_tracker with proper latitude/longitude keys
+        if self.ha_enabled and self.per_drone_enabled:
+            attr_topic = f"{self._per_drone_topic(drone_id)}/pilot_attrs"
+            try:
+                attrs = {
+                    "latitude": _f(lat),
+                    "longitude": _f(lon),
+                    "gps_accuracy": 0.0,  # set if you have it
+                }
+                info = self.client.publish(attr_topic, json.dumps(attrs), qos=self.qos, retain=True)
+                self._warn_if_publish_failed(info)
+            except Exception as e:
+                _log.warning("Pilot attrs publish failed for %s: %s", drone_id, e)
+
     def publish_home(self, drone_id: str, lat: float, lon: float, alt: float = 0.0) -> None:
         """Merge home fields into the per-drone state and republish (if enabled)."""
         drone_id = str(drone_id)
@@ -217,6 +210,20 @@ class MqttSink:
             "home_alt": _f(alt),
         }
         self._merge_and_publish(drone_id, patch)
+
+        # Also feed the home device_tracker with proper latitude/longitude keys
+        if self.ha_enabled and self.per_drone_enabled:
+            attr_topic = f"{self._per_drone_topic(drone_id)}/home_attrs"
+            try:
+                attrs = {
+                    "latitude": _f(lat),
+                    "longitude": _f(lon),
+                    "gps_accuracy": 0.0,  # set if you have it
+                }
+                info = self.client.publish(attr_topic, json.dumps(attrs), qos=self.qos, retain=True)
+                self._warn_if_publish_failed(info)
+            except Exception as e:
+                _log.warning("Home attrs publish failed for %s: %s", drone_id, e)
 
     def close(self) -> None:
         """Stop MQTT loop and disconnect cleanly."""
@@ -283,7 +290,7 @@ class MqttSink:
         freq = g("freq", None)
         freq_mhz = _fmt_freq_mhz(freq)
 
-        # Optional horizontal accuracy (meters) if your parser provides it
+        # Mirror keys for HA device_tracker and optional accuracy
         horiz_acc = g("horizontal_accuracy", 0)
 
         state = {
@@ -294,10 +301,10 @@ class MqttSink:
             "lat": _f(g("lat", 0.0)),
             "lon": _f(g("lon", 0.0)),
 
-            # HA device_tracker attributes for map placement
+            # HA device_tracker expects these names for map placement
             "latitude": _f(g("lat", 0.0)),
             "longitude": _f(g("lon", 0.0)),
-            "gps_accuracy": _f(horiz_acc),
+            "gps_accuracy": _f(horiz_acc),  # optional
 
             "alt": _f(g("alt", 0.0)),
             "height": _f(g("height", 0.0)),
@@ -335,9 +342,9 @@ class MqttSink:
         """
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
+            # Keep it minimal to avoid name duplication like "Drone drone-xyz ..."
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
-            "name": f"{drone_id}",                 # clean label: just the ID
-            "model": sample.get("description") or "Remote ID",
+            "name": f"{drone_id}",
         }
 
         def sensor(uid_suffix: str, name: str, template: str, unit: Optional[str] = None,
@@ -360,29 +367,29 @@ class MqttSink:
             self.client.publish(topic, json.dumps(payload), qos=self.qos, retain=True)
 
         # Core kinematics / position
-        sensor("lat", "Latitude", "{{ value_json.lat | default(0) | float }}", "°", icon="mdi:map-marker")
-        sensor("lon", "Longitude", "{{ value_json.lon | default(0) | float }}", "°", icon="mdi:map-marker")
-        sensor("alt", "Altitude", "{{ value_json.alt | default(0) | float }}", "m", device_class="distance", icon="mdi:map-marker-distance")
-        sensor("speed", "Speed", "{{ value_json.speed | default(0) | float }}", "m/s", device_class="speed", icon="mdi:speedometer")
-        sensor("vspeed", "Vertical Speed", "{{ value_json.vspeed | default(0) | float }}", "m/s", icon="mdi:axis-z-arrow")
-        sensor("height", "AGL", "{{ value_json.height | default(0) | float }}", "m", icon="mdi:altimeter")
-        sensor("dir", "Course", "{{ value_json.direction | default(0) | float }}", "°", icon="mdi:compass")
+        sensor("lat", "Latitude", "{{ value_json.lat | float | default(0) }}", "°", icon="mdi:map-marker")
+        sensor("lon", "Longitude", "{{ value_json.lon | float | default(0) }}", "°", icon="mdi:map-marker")
+        sensor("alt", "Altitude", "{{ value_json.alt | float | default(0) }}", "m", device_class="distance", icon="mdi:map-marker-distance")
+        sensor("speed", "Speed", "{{ value_json.speed | float | default(0) }}", "m/s", device_class="speed", icon="mdi:speedometer")
+        sensor("vspeed", "Vertical Speed", "{{ value_json.vspeed | float | default(0) }}", "m/s", icon="mdi:axis-z-arrow")
+        sensor("height", "AGL", "{{ value_json.height | float | default(0) }}", "m", icon="mdi:altimeter")
+        sensor("dir", "Course", "{{ value_json.direction | float | default(0) }}", "°", icon="mdi:compass")
 
         # Pilot/Home
-        sensor("pilot_lat", "Pilot Latitude", "{{ value_json.pilot_lat | default(0) | float }}", "°", icon="mdi:account")
-        sensor("pilot_lon", "Pilot Longitude", "{{ value_json.pilot_lon | default(0) | float }}", "°", icon="mdi:account")
-        sensor("home_lat", "Home Latitude", "{{ value_json.home_lat | default(0) | float }}", "°", icon="mdi:home")
-        sensor("home_lon", "Home Longitude", "{{ value_json.home_lon | default(0) | float }}", "°", icon="mdi:home")
+        sensor("pilot_lat", "Pilot Latitude", "{{ value_json.pilot_lat | float | default(0) }}", "°", icon="mdi:account")
+        sensor("pilot_lon", "Pilot Longitude", "{{ value_json.pilot_lon | float | default(0) }}", "°", icon="mdi:account")
+        sensor("home_lat", "Home Latitude", "{{ value_json.home_lat | float | default(0) }}", "°", icon="mdi:home")
+        sensor("home_lon", "Home Longitude", "{{ value_json.home_lon | float | default(0) }}", "°", icon="mdi:home")
 
-        # Radio / link (safe default for None)
-        sensor("rssi", "Signal (RSSI)", "{{ value_json.rssi | default(0) | float }}", "dBm", device_class="signal_strength", icon="mdi:wifi")
+        # Radio / link (NOTE: exact template as requested)
+        sensor("rssi", "Signal (RSSI)", "{{ value_json.rssi | float | default(0) }}", "dBm", device_class="signal_strength", icon="mdi:wifi")
         sensor("freq", "Radio Freq (MHz)", "{{ value_json.freq_mhz | float(0) }}", "MHz", icon="mdi:radio-tower")
 
-        # Metadata (non-numeric; leave device_class empty)
+        # Metadata (non-numeric; leave device_class empty to keep HA happy)
         sensor("ua_type", "UA Type", "{{ value_json.ua_type_name | default('') }}", icon="mdi:airplane")
         sensor("op_id", "Operator ID", "{{ value_json.operator_id | default('') }}", icon="mdi:id-card")
 
-        # Primary label-only sensor for the device page
+        # A primary "drone" sensor just to show description on the device page
         sensor("main", "Drone", "{{ value_json.description | default('Drone') }}", icon="mdi:drone")
 
     def _publish_ha_device_tracker(self, drone_id: str, attr_topic: str, sample: Dict[str, Any]) -> None:
@@ -393,25 +400,58 @@ class MqttSink:
         """
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
+            # Minimal device record to avoid duplicate names in HA UIs
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
-            "name": f"{drone_id}",                 # clean label
-            "model": sample.get("description") or "Remote ID",
+            "name": f"{drone_id}",
         }
         cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
         state_topic = f"{attr_topic}/state"
 
         payload = {
-            "name": f"{drone_id}",
+            "name": f"{drone_id}",                # entity name in HA
             "unique_id": base_unique,
-            "device": device,
+            "device": device,                     # groups under the same device
             "source_type": "gps",
             "state_topic": state_topic,           # textual state (we set 'not_home')
-            "json_attributes_topic": attr_topic,  # lat/lon/etc. are attributes
+            "json_attributes_topic": attr_topic,  # lat/lon/etc. are attributes (from per-drone JSON)
             "icon": "mdi:drone",
         }
         # Retain discovery + default state
         self.client.publish(cfg_topic, json.dumps(payload), qos=self.qos, retain=True)
         self.client.publish(state_topic, "not_home", qos=self.qos, retain=True)
+
+        # --- OPTIONAL: Pilot and Home device_trackers (own attribute topics) ---
+        pilot_unique = f"{base_unique}_pilot"
+        pilot_cfg_topic = f"{self.ha_prefix}/device_tracker/{pilot_unique}/config"
+        pilot_attr_topic = f"{attr_topic}/pilot_attrs"
+        pilot_state_topic = f"{attr_topic}/pilot_state"
+        pilot_payload = {
+            "name": f"{drone_id} pilot",
+            "unique_id": pilot_unique,
+            "device": device,             # same device grouping
+            "source_type": "gps",
+            "state_topic": pilot_state_topic,
+            "json_attributes_topic": pilot_attr_topic,
+            "icon": "mdi:account",
+        }
+        self.client.publish(pilot_cfg_topic, json.dumps(pilot_payload), qos=self.qos, retain=True)
+        self.client.publish(pilot_state_topic, "not_home", qos=self.qos, retain=True)
+
+        home_unique = f"{base_unique}_home"
+        home_cfg_topic = f"{self.ha_prefix}/device_tracker/{home_unique}/config"
+        home_attr_topic = f"{attr_topic}/home_attrs"
+        home_state_topic = f"{attr_topic}/home_state"
+        home_payload = {
+            "name": f"{drone_id} home",
+            "unique_id": home_unique,
+            "device": device,
+            "source_type": "gps",
+            "state_topic": home_state_topic,
+            "json_attributes_topic": home_attr_topic,
+            "icon": "mdi:home",
+        }
+        self.client.publish(home_cfg_topic, json.dumps(home_payload), qos=self.qos, retain=True)
+        self.client.publish(home_state_topic, "not_home", qos=self.qos, retain=True)
 
 
 # ────────────────────────────────────────────────
