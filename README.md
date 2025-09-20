@@ -56,7 +56,7 @@ If you install DragonSync elsewhere, ensure the following:
 ## How it Works (on WarDragon)
 
 ```
-Sniffers (BLE RID / DJI)  --> ZMQ 4224 ----\
+Sniffers (WiFi RID / BLE RID / DJI)  --> ZMQ 4224 ----\
                                             --> DragonSync --> CoT: multicast or TAK server
 WarDragon Monitor (GPS)    --> ZMQ 4225 ----/                 \-> MQTT (Home Assistant)
                                                                \-> Lattice (optional)
