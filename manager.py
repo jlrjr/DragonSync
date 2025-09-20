@@ -154,12 +154,20 @@ class DroneManager:
 
         # Housekeeping: drop inactive drones
         for drone_id in to_remove:
+            for s in self.extra_sinks:
+                try:
+                    if hasattr(s, "mark_inactive"):
+                        s.mark_inactive(drone_id)
+                except Exception as e:
+                    logger.warning("Sink mark_inactive failed for %s (sink=%s): %s", drone_id, s, e)
+
             try:
                 self.drones.remove(drone_id)
             except ValueError:
                 pass
             self.drone_dict.pop(drone_id, None)
             logger.debug("Removed drone: %s", drone_id)
+
 
     def close(self):
         """Give every sink a chance to cleanup (e.g., stop MQTT loops, flush, etc.)."""
