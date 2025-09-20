@@ -223,42 +223,57 @@ def zmq_to_cot(
     # Start receiver if enabled
     cot_messenger.start_receiver()
 
-    # Initialize DroneManager with CotMessenger
-    # If your DroneManager supports extra_sinks, use it. If not, fall back safely.
+    # ---- Build sinks list (Lattice + MQTT) ----
     extra_sinks = []
+
+    # Lattice (optional; already created above)
     if lattice_sink is not None:
         extra_sinks.append(lattice_sink)
-    try:
-        drone_manager = DroneManager(
-            max_drones=max_drones,
-            rate_limit=rate_limit,
-            inactivity_timeout=inactivity_timeout,
-            cot_messenger=cot_messenger,
-            mqtt_enabled=config["mqtt_enabled"],
-            mqtt_host=config["mqtt_host"],
-            mqtt_port=config["mqtt_port"],
-            mqtt_topic=config["mqtt_topic"],
-            mqtt_username=config.get("mqtt_username"),
-            mqtt_password=config.get("mqtt_password"),
-            mqtt_tls=config.get("mqtt_tls", False),
-            mqtt_ca_file=config.get("mqtt_ca_file"),
-            mqtt_certfile=config.get("mqtt_certfile"),
-            mqtt_keyfile=config.get("mqtt_keyfile"),
-            mqtt_tls_insecure=config.get("mqtt_tls_insecure", False),
-            extra_sinks=extra_sinks,  # may raise TypeError on older manager.py
-        )
-    except TypeError:
-        # Older manager.py without extra_sinks parameter
-        drone_manager = DroneManager(
-            max_drones=max_drones,
-            rate_limit=rate_limit,
-            inactivity_timeout=inactivity_timeout,
-            cot_messenger=cot_messenger,
-            mqtt_enabled=config["mqtt_enabled"],
-            mqtt_host=config["mqtt_host"],
-            mqtt_port=config["mqtt_port"],
-            mqtt_topic=config["mqtt_topic"],
-        )
+
+    # MQTT sink (optional)
+    mqtt_sink = None
+    if config.get("mqtt_enabled"):
+        if MqttSink is None:
+            logger.critical("mqtt_enabled=true but mqtt_sink.py is missing or failed to import.")
+        else:
+            try:
+                mqtt_sink = MqttSink(
+                    host=config.get("mqtt_host", "127.0.0.1"),
+                    port=int(config.get("mqtt_port", 1883)),
+                    username=(config.get("mqtt_username") or None),
+                    password=(config.get("mqtt_password") or None),
+                    tls=bool(config.get("mqtt_tls", False)),
+                    ca_file=(config.get("mqtt_ca_file") or None),
+                    certfile=(config.get("mqtt_certfile") or None),
+                    keyfile=(config.get("mqtt_keyfile") or None),
+                    tls_insecure=bool(config.get("mqtt_tls_insecure", False)),
+
+                    aggregate_topic=config.get("mqtt_topic", "wardragon/drones"),
+                    retain_state=bool(config.get("mqtt_retain", True)),
+
+                    per_drone_enabled=bool(config.get("mqtt_per_drone_enabled", False)),
+                    per_drone_base=config.get("mqtt_per_drone_base", "wardragon/drone"),
+
+                    ha_enabled=bool(config.get("mqtt_ha_enabled", False)),
+                    ha_prefix=config.get("mqtt_ha_prefix", "homeassistant"),
+                    ha_device_base=config.get("mqtt_ha_device_base", "wardragon_drone"),
+                )
+                extra_sinks.append(mqtt_sink)
+                logger.info("MQTT sink enabled (aggregate=%s, per_drone=%s, HA=%s)",
+                            config.get("mqtt_topic", "wardragon/drones"),
+                            bool(config.get("mqtt_per_drone_enabled", False)),
+                            bool(config.get("mqtt_ha_enabled", False)))
+            except Exception as e:
+                logger.exception("Failed to initialize MQTT sink: %s", e)
+
+    # Initialize DroneManager with CotMessenger (no legacy MQTT args)
+    drone_manager = DroneManager(
+        max_drones=max_drones,
+        rate_limit=rate_limit,
+        inactivity_timeout=inactivity_timeout,
+        cot_messenger=cot_messenger,
+        extra_sinks=extra_sinks,
+    )
 
     def signal_handler(sig, frame):
         """Handles signal interruptions for graceful shutdown."""
@@ -275,7 +290,10 @@ def zmq_to_cot(
         if cot_messenger:
             cot_messenger.close()
         if drone_manager:
-            drone_manager.close()
+            try:
+                drone_manager.close()
+            except Exception:
+                pass
         logger.info("Cleaned up ZMQ resources")
         sys.exit(0)
 
@@ -519,6 +537,13 @@ def zmq_to_cot(
                     except Exception as e:
                         logger.warning(f"Lattice publish_system failed: {e}")
 
+                # Optional publish to MQTT sink if present
+                if mqtt_sink is not None and hasattr(mqtt_sink, "publish_system"):
+                    try:
+                        mqtt_sink.publish_system(status_message)
+                    except Exception as e:
+                        logger.warning(f"MQTT publish_system failed: {e}")
+
             # Send drone updates via DroneManager
             try:
                 drone_manager.send_updates()
@@ -540,6 +565,12 @@ def zmq_to_cot(
         try:
             if not context.closed:
                 context.term()
+        except Exception:
+            pass
+        # ensure sinks shut down
+        try:
+            if 'drone_manager' in locals() and drone_manager:
+                drone_manager.close()
         except Exception:
             pass
         sys.exit(1)
@@ -579,6 +610,8 @@ if __name__ == "__main__":
     parser.add_argument("--mqtt-certfile", type=str, help="Path to client certificate for MQTT TLS (optional)")
     parser.add_argument("--mqtt-keyfile", type=str, help="Path to client key for MQTT TLS (optional)")
     parser.add_argument("--mqtt-tls-insecure", action="store_true", help="(UNSAFE) Skip MQTT TLS hostname/chain verification")
+    parser.add_argument("--mqtt-retain", action="store_true", default=None,
+                        help="Retain published state topics (default: true if unset)")
     parser.add_argument("--mqtt-per-drone-enabled", action="store_true", default=None,
                         help="Publish one message per drone to base/<drone_id>")
     parser.add_argument("--mqtt-per-drone-base", type=str,
@@ -594,7 +627,7 @@ if __name__ == "__main__":
     parser.add_argument("--lattice-token", type=str, help="Lattice environment token (or env LATTICE_TOKEN / ENVIRONMENT_TOKEN)")
     parser.add_argument("--lattice-base-url", type=str, help="Full base URL, e.g. https://lattice-XXXX.env.sandboxes.developer.anduril.com (or env LATTICE_BASE_URL)")
     parser.add_argument("--lattice-endpoint", type=str, help="Endpoint host only (no scheme) to build base_url, e.g. lattice-XXXX.env.sandboxes.developer.anduril.com (or env LATTICE_ENDPOINT)")
-    parser.add_argument("--lattice-sandbox-token", type=str, help="Sandboxes Bearer token (or env SANDBOXES_TOKEN / LATTICE_SANDBOX_TOKEN)")
+    parser.add_argument("--lattice-sandbox-token", type:str, help="Sandboxes Bearer token (or env SANDBOXES_TOKEN / LATTICE_SANDBOX_TOKEN)")
     parser.add_argument("--lattice-source-name", type=str, help="Provenance source name (or env LATTICE_SOURCE_NAME)")
     parser.add_argument("--lattice-drone-rate", type=float, help="Drone publish rate to Lattice (Hz)")
     parser.add_argument("--lattice-wd-rate", type=float, help="WarDragon publish rate to Lattice (Hz)")
