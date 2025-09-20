@@ -374,14 +374,13 @@ class MqttSink:
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
-            "name": "Discovered Drone",
             "model": sample.get("description") or "Remote ID",
         }
         cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
         state_topic = f"{attr_topic}/state"
         
         payload = {
-            "name": f"Drone {drone_id} location",  # clear, single label in UI
+            "name": f"{drone_id}",
             "unique_id": base_unique,
             "device": device,
             "source_type": "gps",
