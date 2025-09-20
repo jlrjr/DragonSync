@@ -376,7 +376,7 @@ class MqttSink:
 
         # Radio / link (safe default for None)
         sensor("rssi", "Signal (RSSI)", "{{ value_json.rssi | default(0) | float }}", "dBm", device_class="signal_strength", icon="mdi:wifi")
-        sensor("freq", "Radio Freq (MHz)", "{{ value_json.freq_mhz | default(0) | float }}", "MHz", icon="mdi:radio-tower")
+        sensor("freq", "Radio Freq (MHz)", "{{ value_json.freq_mhz | float(0) }}", "MHz", icon="mdi:radio-tower")
 
         # Metadata (non-numeric; leave device_class empty)
         sensor("ua_type", "UA Type", "{{ value_json.ua_type_name | default('') }}", icon="mdi:airplane")
