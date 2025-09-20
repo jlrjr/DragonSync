@@ -342,9 +342,8 @@ class MqttSink:
         """
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
-            # Keep it minimal to avoid name duplication like "Drone drone-xyz ..."
+            # Minimal device dict (no "name") to avoid UI duplication like "drone-xyz drone-xyz"
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
-            "name": f"{drone_id}",
         }
 
         def sensor(uid_suffix: str, name: str, template: str, unit: Optional[str] = None,
@@ -381,15 +380,15 @@ class MqttSink:
         sensor("home_lat", "Home Latitude", "{{ value_json.home_lat | float | default(0) }}", "°", icon="mdi:home")
         sensor("home_lon", "Home Longitude", "{{ value_json.home_lon | float | default(0) }}", "°", icon="mdi:home")
 
-        # Radio / link (NOTE: exact template as requested)
+        # Radio / link — exact template requested
         sensor("rssi", "Signal (RSSI)", "{{ value_json.rssi | float | default(0) }}", "dBm", device_class="signal_strength", icon="mdi:wifi")
         sensor("freq", "Radio Freq (MHz)", "{{ value_json.freq_mhz | float(0) }}", "MHz", icon="mdi:radio-tower")
 
-        # Metadata (non-numeric; leave device_class empty to keep HA happy)
+        # Metadata
         sensor("ua_type", "UA Type", "{{ value_json.ua_type_name | default('') }}", icon="mdi:airplane")
         sensor("op_id", "Operator ID", "{{ value_json.operator_id | default('') }}", icon="mdi:id-card")
 
-        # A primary "drone" sensor just to show description on the device page
+        # Friendly description on device page
         sensor("main", "Drone", "{{ value_json.description | default('Drone') }}", icon="mdi:drone")
 
     def _publish_ha_device_tracker(self, drone_id: str, attr_topic: str, sample: Dict[str, Any]) -> None:
@@ -400,33 +399,35 @@ class MqttSink:
         """
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
-            # Minimal device record to avoid duplicate names in HA UIs
+            # Minimal device record (no "name") to avoid duplicate label in UI
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
-            "name": f"{drone_id}",
         }
         cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
         state_topic = f"{attr_topic}/state"
 
+        # Use entity name == drone_id (e.g., "drone-XYZ")
         payload = {
-            "name": f"{drone_id}",                # entity name in HA
+            "name": f"{drone_id}",
             "unique_id": base_unique,
             "device": device,                     # groups under the same device
             "source_type": "gps",
             "state_topic": state_topic,           # textual state (we set 'not_home')
-            "json_attributes_topic": attr_topic,  # lat/lon/etc. are attributes (from per-drone JSON)
+            "json_attributes_topic": attr_topic,  # lat/lon/etc. are attributes
             "icon": "mdi:drone",
         }
         # Retain discovery + default state
         self.client.publish(cfg_topic, json.dumps(payload), qos=self.qos, retain=True)
         self.client.publish(state_topic, "not_home", qos=self.qos, retain=True)
 
-        # --- OPTIONAL: Pilot and Home device_trackers (own attribute topics) ---
+        # --- Pilot tracker (pilot-XYZ) ---
+        tail = _tail_of_drone_id(drone_id)
+        pilot_name = f"pilot-{tail}"
         pilot_unique = f"{base_unique}_pilot"
         pilot_cfg_topic = f"{self.ha_prefix}/device_tracker/{pilot_unique}/config"
         pilot_attr_topic = f"{attr_topic}/pilot_attrs"
         pilot_state_topic = f"{attr_topic}/pilot_state"
         pilot_payload = {
-            "name": f"{drone_id} pilot",
+            "name": pilot_name,
             "unique_id": pilot_unique,
             "device": device,             # same device grouping
             "source_type": "gps",
@@ -437,12 +438,14 @@ class MqttSink:
         self.client.publish(pilot_cfg_topic, json.dumps(pilot_payload), qos=self.qos, retain=True)
         self.client.publish(pilot_state_topic, "not_home", qos=self.qos, retain=True)
 
+        # --- Home tracker (home-XYZ) ---
+        home_name = f"home-{tail}"
         home_unique = f"{base_unique}_home"
         home_cfg_topic = f"{self.ha_prefix}/device_tracker/{home_unique}/config"
         home_attr_topic = f"{attr_topic}/home_attrs"
         home_state_topic = f"{attr_topic}/home_state"
         home_payload = {
-            "name": f"{drone_id} home",
+            "name": home_name,
             "unique_id": home_unique,
             "device": device,
             "source_type": "gps",
@@ -477,6 +480,10 @@ def _fmt_freq_mhz(freq: Any) -> Optional[float]:
     if f > 1e5:  # looks like Hz
         f = f / 1e6
     return round(f, 3)
+
+def _tail_of_drone_id(drone_id: str) -> str:
+    """Return 'XYZ' from 'drone-XYZ' (or the original string if it lacks the prefix)."""
+    return drone_id[len("drone-"):] if drone_id.startswith("drone-") else drone_id
 
 def _json_default(o):
     try:
