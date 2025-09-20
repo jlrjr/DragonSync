@@ -39,9 +39,9 @@ import os
 import zmq
 import json
 try:
-    import paho.mqtt.client as mqtt
-except ImportError:
-    mqtt = None
+    from mqtt_sink import MqttSink
+except Exception:
+    MqttSink = None
 
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.hazmat.primitives import serialization
@@ -579,6 +579,16 @@ if __name__ == "__main__":
     parser.add_argument("--mqtt-certfile", type=str, help="Path to client certificate for MQTT TLS (optional)")
     parser.add_argument("--mqtt-keyfile", type=str, help="Path to client key for MQTT TLS (optional)")
     parser.add_argument("--mqtt-tls-insecure", action="store_true", help="(UNSAFE) Skip MQTT TLS hostname/chain verification")
+    parser.add_argument("--mqtt-per-drone-enabled", action="store_true", default=None,
+                        help="Publish one message per drone to base/<drone_id>")
+    parser.add_argument("--mqtt-per-drone-base", type=str,
+                        help="Base topic for per-drone messages (default: wardragon/drone)")
+    parser.add_argument("--mqtt-ha-enabled", action="store_true", default=None,
+                        help="Enable Home Assistant MQTT Discovery")
+    parser.add_argument("--mqtt-ha-prefix", type=str,
+                        help="HA discovery prefix (default: homeassistant)")
+    parser.add_argument("--mqtt-ha-device-base", type=str,
+                        help="Base used for HA device unique_id (default: wardragon_drone)")
     # ---- Lattice (optional) ----
     parser.add_argument("--lattice-enabled", action="store_true", help="Enable publishing to Lattice")
     parser.add_argument("--lattice-token", type=str, help="Lattice environment token (or env LATTICE_TOKEN / ENVIRONMENT_TOKEN)")
@@ -647,6 +657,11 @@ if __name__ == "__main__":
         "mqtt_certfile": args.mqtt_certfile if hasattr(args, "mqtt_certfile") and args.mqtt_certfile is not None else get_str(config_values.get("mqtt_certfile")),
         "mqtt_keyfile": args.mqtt_keyfile if hasattr(args, "mqtt_keyfile") and args.mqtt_keyfile is not None else get_str(config_values.get("mqtt_keyfile")),
         "mqtt_tls_insecure": args.mqtt_tls_insecure if hasattr(args, "mqtt_tls_insecure") and args.mqtt_tls_insecure is not None else get_bool(config_values.get("mqtt_tls_insecure", False)),
+        "mqtt_per_drone_enabled": args.mqtt_per_drone_enabledxif hasattr(args, "mqtt_per_drone_enabled") and args.mqtt_per_drone_enabled is not None else get_bool(config_values.get("mqtt_per_drone_enabled", False)),
+        "mqtt_per_drone_base": args.mqtt_per_drone_base if hasattr(args, "mqtt_per_drone_base") and args.mqtt_per_drone_base is not None else get_str(config_values.get("mqtt_per_drone_base", "wardragon/drone")),
+        "mqtt_ha_enabled": args.mqtt_ha_enabled if hasattr(args, "mqtt_ha_enabled") and args.mqtt_ha_enabled is not None else get_bool(config_values.get("mqtt_ha_enabled", False)),
+        "mqtt_ha_prefix": args.mqtt_ha_prefif if hasattr(args, "mqtt_ha_prefix") and args.mqtt_ha_prefix is not None else get_str(config_values.get("mqtt_ha_prefix", "homeassistant")),
+        "mqtt_ha_device_base": args.mqtt_ha_device_base if hasattr(args, "mqtt_ha_device_base") and args.mqtt_ha_device_base is not None else get_str(config_values.get("mqtt_ha_device_base", "wardragon_drone")),
         
         # ---- Lattice (optional) config block ----
         "lattice_enabled": args.lattice_enabled or get_bool(config_values.get("lattice_enabled"), False),
@@ -673,9 +688,6 @@ if __name__ == "__main__":
         "lattice_wd_rate": args.lattice_wd_rate if args.lattice_wd_rate is not None else get_float(config_values.get("lattice_wd_rate", 0.2)),
     }
 
-    if config["mqtt_enabled"] and mqtt is None:
-        logger.critical("MQTT support requested, but paho-mqtt is not installed!")
-        sys.exit(1)
     
     # Validate configuration
     try:
