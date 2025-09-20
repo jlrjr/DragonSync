@@ -45,6 +45,7 @@ class MqttSink:
       - publish_drone(drone_obj)
       - publish_pilot(drone_id, lat, lon, alt=0.0)
       - publish_home(drone_id, lat, lon, alt=0.0)
+      - mark_inactive(drone_id)
       - close()
 
     Features:
@@ -171,6 +172,14 @@ class MqttSink:
             except Exception as e:
                 _log.warning("HA discovery failed for %s: %s", drone_id, e)
 
+        # Mark drone tracker online on any drone update
+        if self.ha_enabled and self.per_drone_enabled:
+            try:
+                avail, _, _ = self._availability_topics(drone_id)
+                self.client.publish(avail, "online", qos=self.qos, retain=True)
+            except Exception as e:
+                _log.warning("Drone availability publish failed for %s: %s", drone_id, e)
+
     def publish_pilot(self, drone_id: str, lat: float, lon: float, alt: float = 0.0) -> None:
         """Merge pilot fields into the per-drone state and republish (if enabled)."""
         drone_id = str(drone_id)
@@ -197,6 +206,12 @@ class MqttSink:
                 self._warn_if_publish_failed(info)
             except Exception as e:
                 _log.warning("Pilot attrs publish failed for %s: %s", drone_id, e)
+            # Mark pilot tracker online
+            try:
+                _, pilot_avail, _ = self._availability_topics(drone_id)
+                self.client.publish(pilot_avail, "online", qos=self.qos, retain=True)
+            except Exception as e:
+                _log.warning("Pilot availability publish failed for %s: %s", drone_id, e)
 
     def publish_home(self, drone_id: str, lat: float, lon: float, alt: float = 0.0) -> None:
         """Merge home fields into the per-drone state and republish (if enabled)."""
@@ -224,6 +239,12 @@ class MqttSink:
                 self._warn_if_publish_failed(info)
             except Exception as e:
                 _log.warning("Home attrs publish failed for %s: %s", drone_id, e)
+            # Mark home tracker online
+            try:
+                _, _, home_avail = self._availability_topics(drone_id)
+                self.client.publish(home_avail, "online", qos=self.qos, retain=True)
+            except Exception as e:
+                _log.warning("Home availability publish failed for %s: %s", drone_id, e)
 
     def close(self) -> None:
         """Stop MQTT loop and disconnect cleanly."""
@@ -239,20 +260,15 @@ class MqttSink:
     # NEW: allow manager to mark trackers 'not_home' when a drone ages out
     def mark_inactive(self, drone_id: str) -> None:
         """
-        Mark the drone and its pilot/home trackers as 'not_home' in HA.
-        Safe to call even if HA discovery wasn't used; it will just publish.
+        Mark the drone and its pilot/home trackers as 'offline' (unavailable) in HA.
+        This hides dots on the map but keeps last-known coordinates in history.
         """
-        base = self._per_drone_topic(str(drone_id))
-        topics = [
-            f"{base}/state",        # drone device_tracker
-            f"{base}/pilot_state",  # pilot device_tracker
-            f"{base}/home_state",   # home device_tracker
-        ]
-        for t in topics:
+        avail, pilot_avail, home_avail = self._availability_topics(str(drone_id))
+        for t in (avail, pilot_avail, home_avail):
             try:
-                self.client.publish(t, "not_home", qos=self.qos, retain=True)
+                self.client.publish(t, "offline", qos=self.qos, retain=True)
             except Exception as e:
-                _log.warning("MqttSink mark_inactive publish failed for %s: %s", t, e)
+                _log.warning("MqttSink mark_inactive availability publish failed for %s: %s", t, e)
 
     # ────────────────────────────────────────────────
     # Internals
@@ -296,6 +312,14 @@ class MqttSink:
 
     def _per_drone_topic(self, drone_id: str) -> str:
         return f"{self.per_drone_base}/{drone_id}"
+
+    def _availability_topics(self, drone_id: str):
+        base = self._per_drone_topic(drone_id)
+        return (
+            f"{base}/availability",       # drone tracker
+            f"{base}/pilot_availability", # pilot tracker
+            f"{base}/home_availability",  # home tracker
+        )
 
     def _drone_to_state(self, d: Any) -> Dict[str, Any]:
         """
@@ -412,14 +436,15 @@ class MqttSink:
     def _publish_ha_device_tracker(self, drone_id: str, attr_topic: str, sample: Dict[str, Any]) -> None:
         """
         Minimal HA discovery for a map dot: one MQTT device_tracker per drone.
-        We publish 'not_home' on a small /state topic, and the attributes (lat/lon/etc.)
-        live on the per-drone JSON topic.
+        We publish 'online' availability + default 'not_home' state; attributes live on per-drone JSON topic.
         """
         base_unique = f"{self.ha_device_base}_{drone_id}"
         device = {
             "identifiers": [f"{self.ha_device_base}:{drone_id}"],
             "name": f"{drone_id}",
         }
+
+        drone_avail, pilot_avail, home_avail = self._availability_topics(drone_id)
         cfg_topic = f"{self.ha_prefix}/device_tracker/{base_unique}/config"
         state_topic = f"{attr_topic}/state"
 
@@ -429,13 +454,18 @@ class MqttSink:
             "unique_id": base_unique,
             "device": device,                     # groups under the same device
             "source_type": "gps",
-            "state_topic": state_topic,           # textual state (we set 'not_home')
+            "state_topic": state_topic,           # textual state (we set 'not_home' initially)
             "json_attributes_topic": attr_topic,  # lat/lon/etc. are attributes
             "icon": "mdi:drone",
+            # Availability
+            "availability_topic": drone_avail,
+            "payload_available": "online",
+            "payload_not_available": "offline",
         }
-        # Retain discovery + default state
+        # Retain discovery + default state + availability online
         self.client.publish(cfg_topic, json.dumps(payload), qos=self.qos, retain=True)
         self.client.publish(state_topic, "not_home", qos=self.qos, retain=True)
+        self.client.publish(drone_avail, "online", qos=self.qos, retain=True)
 
         # --- Pilot tracker (pilot-XYZ) ---
         tail = _tail_of_drone_id(drone_id)
@@ -452,9 +482,14 @@ class MqttSink:
             "state_topic": pilot_state_topic,
             "json_attributes_topic": pilot_attr_topic,
             "icon": "mdi:account",
+            # Availability
+            "availability_topic": pilot_avail,
+            "payload_available": "online",
+            "payload_not_available": "offline",
         }
         self.client.publish(pilot_cfg_topic, json.dumps(pilot_payload), qos=self.qos, retain=True)
         self.client.publish(pilot_state_topic, "not_home", qos=self.qos, retain=True)
+        self.client.publish(pilot_avail, "online", qos=self.qos, retain=True)
 
         # --- Home tracker (home-XYZ) ---
         home_name = f"home-{tail}"
@@ -470,9 +505,14 @@ class MqttSink:
             "state_topic": home_state_topic,
             "json_attributes_topic": home_attr_topic,
             "icon": "mdi:home",
+            # Availability
+            "availability_topic": home_avail,
+            "payload_available": "online",
+            "payload_not_available": "offline",
         }
         self.client.publish(home_cfg_topic, json.dumps(home_payload), qos=self.qos, retain=True)
         self.client.publish(home_state_topic, "not_home", qos=self.qos, retain=True)
+        self.client.publish(home_avail, "online", qos=self.qos, retain=True)
 
 
 # ────────────────────────────────────────────────
@@ -508,3 +548,4 @@ def _json_default(o):
         return str(o)
     except Exception:
         return None
+
