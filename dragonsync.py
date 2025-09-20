@@ -627,7 +627,7 @@ if __name__ == "__main__":
     parser.add_argument("--lattice-token", type=str, help="Lattice environment token (or env LATTICE_TOKEN / ENVIRONMENT_TOKEN)")
     parser.add_argument("--lattice-base-url", type=str, help="Full base URL, e.g. https://lattice-XXXX.env.sandboxes.developer.anduril.com (or env LATTICE_BASE_URL)")
     parser.add_argument("--lattice-endpoint", type=str, help="Endpoint host only (no scheme) to build base_url, e.g. lattice-XXXX.env.sandboxes.developer.anduril.com (or env LATTICE_ENDPOINT)")
-    parser.add_argument("--lattice-sandbox-token", type:str, help="Sandboxes Bearer token (or env SANDBOXES_TOKEN / LATTICE_SANDBOX_TOKEN)")
+    parser.add_argument("--lattice-sandbox-token", type=str, help="Sandboxes Bearer token (or env SANDBOXES_TOKEN / LATTICE_SANDBOX_TOKEN)")
     parser.add_argument("--lattice-source-name", type=str, help="Provenance source name (or env LATTICE_SOURCE_NAME)")
     parser.add_argument("--lattice-drone-rate", type=float, help="Drone publish rate to Lattice (Hz)")
     parser.add_argument("--lattice-wd-rate", type=float, help="WarDragon publish rate to Lattice (Hz)")
