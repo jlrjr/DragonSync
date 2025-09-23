@@ -190,9 +190,9 @@ class LatticeSink:
         except Exception:
             pass
 
-        ontology = Ontology(template="TEMPLATE_TRACK", platform_type="Ground Sensor")
+        ontology = Ontology(template="TEMPLATE_ASSET", platform_type="ANTENNA")
         # Keep only disposition; omit environment to avoid enum mismatches
-        mil_view = MilView(disposition="DISPOSITION_NEUTRAL")
+        mil_view = MilView(disposition="DISPOSITION_FRIENDLY")
 
         provenance = Provenance(
             data_type="telemetry",
