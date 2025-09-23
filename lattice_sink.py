@@ -323,7 +323,7 @@ class LatticeSink:
         except Exception:
             pass
 
-        ontology = Ontology(template="TEMPLATE_TRACK", platform_type="Operator")
+        ontology = Ontology(template="TEMPLATE_TRACK", platform_type="GCS")
         mil_view = MilView()  # omit env & disposition for max compatibility
 
         provenance = Provenance(
@@ -394,7 +394,7 @@ class LatticeSink:
         except Exception:
             pass
 
-        ontology = Ontology(template="TEMPLATE_TRACK", platform_type="Home Point")
+        ontology = Ontology(template="TEMPLATE_TRACK", platform_type="AIRFIELD/AIRBASE")
         mil_view = MilView()  # omit env & disposition
 
         provenance = Provenance(
