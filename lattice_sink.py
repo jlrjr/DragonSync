@@ -95,6 +95,16 @@ def _air_env_value():
                 return getattr(MilEnvironment, attr)
     return "ENVIRONMENT_AIR"
 
+def yaw_to_quaternion_enu(yaw_degrees: float) -> List[float]:
+    # Convert degrees to radians.
+    yaw_rad = math.radians(90 - yaw_degrees)  # Adjust NED yaw by 90 degrees for ENU.
+
+    qw = math.cos(yaw_rad * 0.5)
+    qz = math.sin(yaw_rad * 0.5)
+
+    return [qw, 0, 0, qz]
+
+
 # ────────────────────────────────────────────────────────────────────────────────
 # LatticeSink (minimal publish)
 # ────────────────────────────────────────────────────────────────────────────────
@@ -240,12 +250,32 @@ class LatticeSink:
         if not _valid_latlon(lat, lon):
             return
 
-        location = Location(position=Position(latitude_degrees=float(lat), longitude_degrees=float(lon)))
+        direction = g("direction")
+        bearing_q = yaw_to_quaternion_enu(direction)
+
+        speed = g("speed")
+        attitude = Quaternion(
+            w=bearing_q[0],
+            x=bearing_q[1],
+            y=bearing_q[2],
+            z=bearing_q[3]
+        )
+        
+        
+        location = Location(position=Position(
+            latitude_degrees=float(lat), 
+            longitude_degrees=float(lon),
+            speed_mps=speed,
+            attitude_enu=attitude
+        ))
+        
         try:
             if hae is not None:
                 location.position.height_above_ellipsoid_meters = float(hae)  # type: ignore[attr-defined]
         except Exception:
             pass
+
+        
 
         aliases = Aliases(name=entity_id)
         ontology = Ontology(template="TEMPLATE_TRACK", platform_type="GROUP 1-2: ROTARY WING")
