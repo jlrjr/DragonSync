@@ -248,7 +248,7 @@ class LatticeSink:
             pass
 
         aliases = Aliases(name=entity_id)
-        ontology = Ontology(template="TEMPLATE_TRACK", platform_type="Small UAS")
+        ontology = Ontology(template="TEMPLATE_TRACK", platform_type="GROUP 1-2: ROTARY WING")
 
         mil_view = MilView(
             environment=_air_env_value(),
