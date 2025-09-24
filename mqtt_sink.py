@@ -77,7 +77,7 @@ class MqttSink:
         aggregate_topic: Optional[str] = "wardragon/drones",
         per_drone_enabled: bool = False,
         per_drone_base: str = "wardragon/drone",
-        retain_state: bool = True,
+        retain_state: bool = False,
         # Home Assistant
         ha_enabled: bool = False,
         ha_prefix: str = "homeassistant",
@@ -100,8 +100,16 @@ class MqttSink:
         self._seen_for_ha: set[str] = set()
         self._state_cache: Dict[str, Dict[str, Any]] = {}
 
+        # system device (WarDragon kit) tracking
+        self._ha_system_announced = False
+        self._sys_base = "wardragon/system"
+
         # --- MQTT client setup ---
-        self.client = mqtt.Client(client_id=client_id, clean_session=True)  # type: ignore
+        self.client = mqtt.Client(
+            client_id=client_id,
+            clean_session=True,  # no behavior change for MQTTv5
+            protocol=getattr(mqtt, "MQTTv5", mqtt.MQTTv311),
+        )  # type: ignore
         try:
             self.client.enable_logger(_log)  # paho >= 1.6
         except Exception:
@@ -122,9 +130,20 @@ class MqttSink:
                 _log.critical("MqttSink TLS configuration failed: %s", e)
                 raise
 
+        # Global LWT (service availability)
+        try:
+            self.client.will_set("wardragon/service/availability", "offline", qos=self.qos, retain=True)
+        except Exception:
+            pass
+
         def _on_connect(c, u, flags, rc, props=None):
             if rc == 0:
                 _log.info("MqttSink connected to %s:%s", host, port)
+                # Birth (service availability online)
+                try:
+                    self.client.publish("wardragon/service/availability", "online", qos=self.qos, retain=True)
+                except Exception:
+                    pass
             else:
                 _log.warning("MqttSink connect rc=%s", rc)
 
@@ -249,6 +268,15 @@ class MqttSink:
     def close(self) -> None:
         """Stop MQTT loop and disconnect cleanly."""
         try:
+            # mark system offline (and service offline) before disconnect
+            try:
+                self.client.publish(f"{self._sys_base}/availability", "offline", qos=self.qos, retain=True)
+            except Exception:
+                pass
+            try:
+                self.client.publish("wardragon/service/availability", "offline", qos=self.qos, retain=True)
+            except Exception:
+                pass
             self.client.loop_stop()
         except Exception as e:
             _log.warning("MqttSink loop_stop error: %s", e)
@@ -513,6 +541,119 @@ class MqttSink:
         self.client.publish(home_cfg_topic, json.dumps(home_payload), qos=self.qos, retain=True)
         self.client.publish(home_state_topic, "not_home", qos=self.qos, retain=True)
         self.client.publish(home_avail, "online", qos=self.qos, retain=True)
+
+    # ─────────────────────────── System device (WarDragon kit) ───────────────────
+
+    def publish_system(self, status_message: Dict[str, Any]) -> None:
+        try:
+            gps = status_message.get("gps_data", {}) or {}
+            sysstats = status_message.get("system_stats", {}) or {}
+            temps = status_message.get("ant_sdr_temps", {}) or {}
+
+            serial = status_message.get("serial_number", "unknown")
+            lat = float(gps.get("latitude", 0.0) or 0.0)
+            lon = float(gps.get("longitude", 0.0) or 0.0)
+            alt = float(gps.get("altitude", 0.0) or 0.0)
+            speed = float(gps.get("speed", 0.0) or 0.0)
+            track = float(gps.get("track", 0.0) or 0.0)
+
+            cpu = float(sysstats.get("cpu_usage", 0.0) or 0.0)
+            mem = sysstats.get("memory", {}) or {}
+            disk = sysstats.get("disk", {}) or {}
+            mem_total_mb = float(mem.get("total", 0.0) or 0.0) / (1024 * 1024)
+            mem_avail_mb = float(mem.get("available", 0.0) or 0.0) / (1024 * 1024)
+            disk_total_mb = float(disk.get("total", 0.0) or 0.0) / (1024 * 1024)
+            disk_used_mb  = float(disk.get("used", 0.0) or 0.0) / (1024 * 1024)
+            temp_c = float(sysstats.get("temperature", 0.0) or 0.0)
+            uptime_s = float(sysstats.get("uptime", 0.0) or 0.0)
+
+            pluto_temp = temps.get("pluto_temp", "N/A")
+            zynq_temp  = temps.get("zynq_temp", "N/A")
+
+            if self.ha_enabled and not self._ha_system_announced:
+                self._publish_ha_system_discovery()
+                self._ha_system_announced = True
+
+            attrs = {
+                "id": f"wardragon-{serial}",
+                "latitude": lat, "longitude": lon, "hae": alt,
+                "cpu_usage": cpu,
+                "memory_total_mb": round(mem_total_mb, 1),
+                "memory_available_mb": round(mem_avail_mb, 1),
+                "disk_total_mb": round(disk_total_mb, 1),
+                "disk_used_mb": round(disk_used_mb, 1),
+                "temperature_c": temp_c,
+                "uptime_s": uptime_s,
+                "pluto_temp_c": pluto_temp,
+                "zynq_temp_c": zynq_temp,
+                "speed_mps": speed,
+                "track_deg": track,
+                "updated": int(time.time()),
+            }
+            self.client.publish(f"{self._sys_base}/attrs", json.dumps(attrs), qos=self.qos, retain=False)
+            self.client.publish(f"{self._sys_base}/state", "online", qos=self.qos, retain=False)
+            self.client.publish(f"{self._sys_base}/availability", "online", qos=self.qos, retain=True)
+
+        except Exception as e:
+            _log.warning("publish_system failed: %s", e)
+
+    def _publish_ha_system_discovery(self) -> None:
+        device = {
+            "identifiers": [f"{self.ha_device_base}:system"],
+            "name": "WarDragon System",
+            "manufacturer": "CEMAXECUTER",
+            "model": "WarDragon",
+        }
+        unique_base = f"{self.ha_device_base}_system"
+        avail = f"{self._sys_base}/availability"
+        state_topic = f"{self._sys_base}/state"
+        attrs_topic = f"{self._sys_base}/attrs"
+
+        # device_tracker for kit GPS position
+        dt_cfg_topic = f"{self.ha_prefix}/device_tracker/{unique_base}/config"
+        dt_payload = {
+            "name": "WarDragon Pro",
+            "unique_id": unique_base,
+            "device": device,
+            "source_type": "gps",
+            "state_topic": state_topic,
+            "json_attributes_topic": attrs_topic,
+            "availability_topic": avail,
+            "payload_available": "online",
+            "payload_not_available": "offline",
+            "icon": "mdi:router-wireless",
+        }
+        self.client.publish(dt_cfg_topic, json.dumps(dt_payload), qos=self.qos, retain=True)
+        self.client.publish(state_topic, "not_home", qos=self.qos, retain=True)
+        self.client.publish(avail, "online", qos=self.qos, retain=True)
+
+        def sensor(uid_suffix: str, name: str, template: str, unit: Optional[str] = None,
+                   device_class: Optional[str] = None, icon: Optional[str] = None):
+            uid = f"{self.ha_device_base}_system_{uid_suffix}"
+            cfg = {
+                "name": name,
+                "unique_id": uid,
+                "device": device,
+                "state_topic": attrs_topic,
+                "value_template": template,
+            }
+            if unit: cfg["unit_of_measurement"] = unit
+            if device_class: cfg["device_class"] = device_class
+            if icon: cfg["icon"] = icon
+            self.client.publish(f"{self.ha_prefix}/sensor/{uid}/config", json.dumps(cfg), qos=self.qos, retain=True)
+
+        # core kit sensors
+        sensor("cpu", "CPU Usage", "{{ value_json.cpu_usage|float(0) }}", "%", "power_factor", "mdi:cpu-64-bit")
+        sensor("mem_free", "Memory Available", "{{ value_json.memory_available_mb|float(0) }}", "MB", None, "mdi:memory")
+        sensor("mem_total", "Memory Total", "{{ value_json.memory_total_mb|float(0) }}", "MB", None, "mdi:memory")
+        sensor("disk_used", "Disk Used", "{{ value_json.disk_used_mb|float(0) }}", "MB", None, "mdi:harddisk")
+        sensor("disk_total", "Disk Total", "{{ value_json.disk_total_mb|float(0) }}", "MB", None, "mdi:harddisk")
+        sensor("temp", "System Temp", "{{ value_json.temperature_c|float(0) }}", "°C", "temperature", "mdi:thermometer")
+        sensor("uptime", "Uptime", "{{ (value_json.uptime_s|float(0))/3600 }}", "h", None, "mdi:timer-outline")
+        sensor("speed", "Ground Speed", "{{ value_json.speed_mps|float(0) }}", "m/s", "speed", "mdi:speedometer")
+        sensor("track", "Course", "{{ value_json.track_deg|float(0) }}", "°", None, "mdi:compass")
+        sensor("pluto_temp", "Pluto Temp", "{{ value_json.pluto_temp_c }}", "°C", "temperature", "mdi:thermometer")
+        sensor("zynq_temp", "Zynq Temp", "{{ value_json.zynq_temp_c }}", "°C", "temperature", "mdi:thermometer")
 
 
 # ────────────────────────────────────────────────
