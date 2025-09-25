@@ -31,7 +31,7 @@ from typing import Any, Dict, Optional
 
 try:
     import paho.mqtt.client as mqtt
-except Exception as e:
+except Exception:
     mqtt = None  # type: ignore
 
 _log = logging.getLogger(__name__)
@@ -104,12 +104,30 @@ class MqttSink:
         self._ha_system_announced = False
         self._sys_base = "wardragon/system"
 
-        # --- MQTT client setup ---
-        self.client = mqtt.Client(
-            client_id=client_id,
-            clean_session=True,  # no behavior change for MQTTv5
-            protocol=getattr(mqtt, "MQTTv5", mqtt.MQTTv311),
-        )  # type: ignore
+        # --- MQTT client setup (robust across paho v1.x and v2.x) ---
+        protocol = getattr(mqtt, "MQTTv5", getattr(mqtt, "MQTTv311"))  # prefer v5 when available
+
+        client_kwargs: Dict[str, Any] = {
+            "client_id": client_id,
+            "protocol": protocol,
+        }
+
+        # paho-mqtt v2 introduced explicit callback API versions
+        try:
+            cb_api_ver = getattr(mqtt, "CallbackAPIVersion", None)
+            if cb_api_ver is not None:
+                # Use the modern 5-arg callback signatures when possible
+                client_kwargs["callback_api_version"] = cb_api_ver.VERSION2
+        except Exception:
+            pass
+
+        # clean_session is invalid with MQTTv5; include only for v3.1.1
+        if protocol != getattr(mqtt, "MQTTv5", object()):
+            client_kwargs["clean_session"] = True
+
+        self.client = mqtt.Client(**client_kwargs)  # type: ignore
+
+        # Use paho's internal logging if available
         try:
             self.client.enable_logger(_log)  # paho >= 1.6
         except Exception:
@@ -136,7 +154,8 @@ class MqttSink:
         except Exception:
             pass
 
-        def _on_connect(c, u, flags, rc, props=None):
+        # Callbacks compatible with both API versions
+        def _on_connect(client, userdata, flags, rc, properties=None):
             if rc == 0:
                 _log.info("MqttSink connected to %s:%s", host, port)
                 # Birth (service availability online)
@@ -147,15 +166,17 @@ class MqttSink:
             else:
                 _log.warning("MqttSink connect rc=%s", rc)
 
-        def _on_disconnect(c, u, rc, props=None):
+        def _on_disconnect(client, userdata, rc, properties=None):
             _log.info("MqttSink disconnected rc=%s", rc)
 
         self.client.on_connect = _on_connect
         self.client.on_disconnect = _on_disconnect
 
         try:
+            # Connect first, then start the background network loop
             self.client.connect(host, int(port), keepalive=keepalive)
             self.client.loop_start()
+
             # best-effort wait for connection (if supported)
             is_conn = getattr(self.client, "is_connected", None)
             deadline = time.time() + 3.0
@@ -333,7 +354,7 @@ class MqttSink:
     def _warn_if_publish_failed(self, info) -> None:
         try:
             rc = getattr(info, "rc", None)
-            if rc is not None and rc != mqtt.MQTT_ERR_SUCCESS:  # type: ignore
+            if rc is not None and rc != getattr(mqtt, "MQTT_ERR_SUCCESS", 0):  # type: ignore
                 _log.warning("MQTT publish returned rc=%s", rc)
         except Exception:
             pass
@@ -643,7 +664,7 @@ class MqttSink:
             self.client.publish(f"{self.ha_prefix}/sensor/{uid}/config", json.dumps(cfg), qos=self.qos, retain=True)
 
         # core kit sensors
-        sensor("cpu", "CPU Usage", "{{ value_json.cpu_usage|float(0) }}", "%", "power_factor", "mdi:cpu-64-bit")
+        sensor("cpu", "CPU Usage", "{{ value_json.cpu_usage|float(0) }}", "%", None, "mdi:cpu-64-bit")
         sensor("mem_free", "Memory Available", "{{ value_json.memory_available_mb|float(0) }}", "MB", None, "mdi:memory")
         sensor("mem_total", "Memory Total", "{{ value_json.memory_total_mb|float(0) }}", "MB", None, "mdi:memory")
         sensor("disk_used", "Disk Used", "{{ value_json.disk_used_mb|float(0) }}", "MB", None, "mdi:harddisk")
