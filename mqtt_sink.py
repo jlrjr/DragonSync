@@ -572,24 +572,24 @@ class MqttSink:
             temps = status_message.get("ant_sdr_temps", {}) or {}
 
             serial = status_message.get("serial_number", "unknown")
-            lat = float(gps.get("latitude", 0.0) or 0.0)
-            lon = float(gps.get("longitude", 0.0) or 0.0)
-            alt = float(gps.get("altitude", 0.0) or 0.0)
-            speed = float(gps.get("speed", 0.0) or 0.0)
-            track = float(gps.get("track", 0.0) or 0.0)
+            lat = _f_or_zero(gps.get("latitude", 0.0))
+            lon = _f_or_zero(gps.get("longitude", 0.0))
+            alt = _f_or_zero(gps.get("altitude", 0.0))
+            speed = _f_or_zero(gps.get("speed", 0.0))
+            track = _f_or_zero(gps.get("track", 0.0))
 
-            cpu = float(sysstats.get("cpu_usage", 0.0) or 0.0)
+            cpu = _f_or_zero(sysstats.get("cpu_usage", 0.0))
             mem = sysstats.get("memory", {}) or {}
             disk = sysstats.get("disk", {}) or {}
-            mem_total_mb = float(mem.get("total", 0.0) or 0.0) / (1024 * 1024)
-            mem_avail_mb = float(mem.get("available", 0.0) or 0.0) / (1024 * 1024)
-            disk_total_mb = float(disk.get("total", 0.0) or 0.0) / (1024 * 1024)
-            disk_used_mb  = float(disk.get("used", 0.0) or 0.0) / (1024 * 1024)
-            temp_c = float(sysstats.get("temperature", 0.0) or 0.0)
-            uptime_s = float(sysstats.get("uptime", 0.0) or 0.0)
+            mem_total_mb = _f_or_zero(mem.get("total", 0.0)) / (1024 * 1024)
+            mem_avail_mb = _f_or_zero(mem.get("available", 0.0)) / (1024 * 1024)
+            disk_total_mb = _f_or_zero(disk.get("total", 0.0)) / (1024 * 1024)
+            disk_used_mb  = _f_or_zero(disk.get("used", 0.0)) / (1024 * 1024)
+            temp_c = _f_or_zero(sysstats.get("temperature", 0.0))
+            uptime_s = _f_or_zero(sysstats.get("uptime", 0.0))
 
-            pluto_temp = temps.get("pluto_temp", "N/A")
-            zynq_temp  = temps.get("zynq_temp", "N/A")
+            pluto_temp = _f_or_none(temps.get("pluto_temp"))
+            zynq_temp  = _f_or_none(temps.get("zynq_temp"))
 
             if self.ha_enabled and not self._ha_system_announced:
                 self._publish_ha_system_discovery()
@@ -673,8 +673,8 @@ class MqttSink:
         sensor("uptime", "Uptime", "{{ (value_json.uptime_s|float(0))/3600 }}", "h", None, "mdi:timer-outline")
         sensor("speed", "Ground Speed", "{{ value_json.speed_mps|float(0) }}", "m/s", "speed", "mdi:speedometer")
         sensor("track", "Course", "{{ value_json.track_deg|float(0) }}", "°", None, "mdi:compass")
-        sensor("pluto_temp", "Pluto Temp", "{{ value_json.pluto_temp_c }}", "°C", "temperature", "mdi:thermometer")
-        sensor("zynq_temp", "Zynq Temp", "{{ value_json.zynq_temp_c }}", "°C", "temperature", "mdi:thermometer")
+        sensor("pluto_temp", "Pluto Temp", "{{ value_json.pluto_temp_c | float(0) }}", "°C", "temperature", "mdi:thermometer")
+        sensor("zynq_temp", "Zynq Temp", "{{ value_json.zynq_temp_c | float(0) }}", "°C", "temperature", "mdi:thermometer")
 
 
 # ────────────────────────────────────────────────
@@ -691,6 +691,18 @@ def _f(x) -> float:
         return float(x)
     except Exception:
         return 0.0
+
+def _f_or_zero(x) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return 0.0
+
+def _f_or_none(x):
+    try:
+        return float(x)
+    except Exception:
+        return None
 
 def _fmt_freq_mhz(freq: Any) -> Optional[float]:
     try:
