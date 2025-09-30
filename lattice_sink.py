@@ -35,7 +35,8 @@ try:
     import anduril as _anduril_mod  # for __version__
     from anduril import Lattice
     from anduril import ( 
-        Location, Position, MilView, Ontology, Provenance, Aliases, Classification, ClassificationInformation
+        Location, Position, MilView, Ontology, Provenance, Aliases, Classification, ClassificationInformation, 
+        Health, HealthComponent, ComponentMessage
     )
     # Optional enum (names differ across SDKs; used only for AIR)
     try:
@@ -207,8 +208,57 @@ class LatticeSink:
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=10)
 
-        # todo: add health components
-
+        # TODO: determine what to use for connection status
+        # TODO: add system health parameters and warning ranges for each
+        
+        health=Health(
+            connection_status="CONNECTION_STATUS_ONLINE",
+            health_status="HEALTH_STATUS_HEALTHY",
+            components=[
+                ComponentHealth(
+                    id="cpu",
+                    name="CPU",
+                    health="HEALTH_STATUS_WARN",
+                    messages=[
+                        ComponentMessage(
+                            status="HEALTH_STATUS_WARN",
+                            message="97 %"
+                        )
+                    ],
+                    update_time=latest_timestamp
+                ),
+                ComponentHealth(
+                    id="memory",
+                    name="Memory",
+                    health="HEALTH_STATUS_HEALTHY",
+                    messages=[
+                        ComponentMessage(
+                            status="HEALTH_STATUS_WARN",
+                            message="Used: 3.1 GB"
+                        ),
+                        ComponentMessage(
+                            status="HEALTH_STATUS_WARN",
+                            message="Free: 0.75 GB"
+                        ),
+                    ],
+                    update_time=latest_timestamp
+                ),
+                ComponentHealth(
+                    id="disk",
+                    name="Disk",
+                    health="HEALTH_STATUS_HEALTHY",
+                    messages=[
+                        ComponentMessage(
+                            status="HEALTH_STATUS_HEALTHY",
+                            message="Total: 500 GB"
+                        ),
+                        ComponentMessage(
+                            status="HEALTH_STATUS_HEALTHY",
+                            message="Used: 125 GB"
+                        )
+                    ],
+                    update_time=latest_timestamp                        
+                ),
 
         try:
             self.client.entities.publish_entity(
@@ -251,7 +301,12 @@ class LatticeSink:
         if not _valid_latlon(lat, lon):
             return
 
-        location = Location(position=Position(latitude_degrees=float(lat), longitude_degrees=float(lon)))
+        location = Location(
+            position=Position(
+                latitude_degrees=float(lat), 
+                longitude_degrees=float(lon)
+            )
+        )
         try:
             if hae is not None:
                 location.position.height_above_ellipsoid_meters = float(hae)  # type: ignore[attr-defined]
@@ -259,7 +314,10 @@ class LatticeSink:
             pass
 
         aliases = Aliases(name=entity_id)
-        ontology = Ontology(template="TEMPLATE_TRACK", platform_type="Small UAS")
+        ontology = Ontology(
+            template="TEMPLATE_TRACK", 
+            platform_type="Small UAS"
+        )
 
         mil_view = MilView(
             environment=_air_env_value(),
@@ -273,7 +331,7 @@ class LatticeSink:
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=5)
 
-        # TODO: add optional heading, speed, etc. if available
+        # TODO: add optional track heading, speed, etc. if available
 
         try:
             self.client.entities.publish_entity(
