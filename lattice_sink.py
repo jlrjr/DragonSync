@@ -34,15 +34,8 @@ import os
 try:
     import anduril as _anduril_mod  # for __version__
     from anduril import Lattice
-    from anduril import (
-        Location,
-        Position,
-        MilView,
-        Ontology,
-        Provenance,
-        Aliases,
-        Classification,
-        ClassificationInformation,
+    from anduril import ( 
+        Location, Position, MilView, Ontology, Provenance, Aliases, Classification, ClassificationInformation
     )
     # Optional enum (names differ across SDKs; used only for AIR)
     try:
@@ -135,7 +128,7 @@ class LatticeSink:
             else:
                 self.client = Lattice(token=token, headers=headers)  # type: ignore
             _log.info("LatticeSink ACTIVE. file=%s", os.path.abspath(__file__))
-            _log.info("anduril SDK version: %s", _SDK_VERSION)
+            _log.info("Anduril Lattice SDK version: %s", _SDK_VERSION)
         except TypeError:
             if base_url:
                 self.client = Lattice(token=token, base_url=base_url)  # type: ignore
@@ -164,10 +157,10 @@ class LatticeSink:
             return True
         return False
 
-    # ───────────────────────────── WarDragon (ground) ─────────────────────────────
+    # ───────────────────────────── WarDragon (ground sensor) ─────────────────────────────
     def publish_system(self, s: Dict[str, Any]) -> None:
         """
-        Publish WarDragon position as a minimal ground track.
+        Publish WarDragon position as a Lattice asset entity.
         """
         if not self._rate_ok("wd"):
             return
@@ -183,24 +176,39 @@ class LatticeSink:
         entity_id = f"wardragon-{serial}"
         alias_name = f"WarDragon {serial}"
 
-        location = Location(position=Position(latitude_degrees=float(lat), longitude_degrees=float(lon)))
+        location = Location(
+            position=Position(
+                latitude_degrees=float(lat),
+                longitude_degrees=float(lon)
+            )   
+        )
         try:
             if hae is not None:
                 location.position.height_above_ellipsoid_meters = float(hae)  # type: ignore[attr-defined]
         except Exception:
             pass
 
-        ontology = Ontology(template="TEMPLATE_ASSET", platform_type="Ground Sensor")
+        ontology = Ontology(
+            template="TEMPLATE_ASSET", 
+            platform_type="Antenna"
+        )
         # Keep only disposition; omit environment to avoid enum mismatches
-        mil_view = MilView(disposition="DISPOSITION_FRIENDLY")
+        mil_view = MilView(
+            disposition="DISPOSITION_FRIENDLY"
+        )
 
         provenance = Provenance(
-            data_type="telemetry",
+            data_type="wardragon-sensor",
             integration_name=self.source_name,
             source_update_time=_now_utc().isoformat(),
         )
-        aliases = Aliases(name=alias_name)
+        aliases = Aliases(
+            name=alias_name
+        )
         expiry_time = _now_utc() + dt.timedelta(minutes=10)
+
+        # todo: add health components
+
 
         try:
             self.client.entities.publish_entity(
@@ -211,9 +219,12 @@ class LatticeSink:
                 mil_view=mil_view,
                 provenance=provenance,
                 aliases=aliases,
+                health=health,
                 expiry_time=expiry_time,
                 data_classification=Classification(
-                    default=ClassificationInformation(level="CLASSIFICATION_LEVELS_UNCLASSIFIED")
+                    default=ClassificationInformation(
+                        level="CLASSIFICATION_LEVELS_UNCLASSIFIED"
+                    )
                 ),
                 request_options=self._req_opts,
             )
@@ -256,11 +267,13 @@ class LatticeSink:
         )
 
         provenance = Provenance(
-            data_type="drone-telemetry",
+            data_type="wardragon-detection",
             integration_name=self.source_name,
             source_update_time=_now_utc().isoformat(),
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=5)
+
+        # TODO: add optional heading, speed, etc. if available
 
         try:
             self.client.entities.publish_entity(
@@ -327,7 +340,7 @@ class LatticeSink:
         mil_view = MilView()  # omit env & disposition for max compatibility
 
         provenance = Provenance(
-            data_type="pilot-position",
+            data_type="wardragon-detection",
             integration_name=self.source_name,
             source_update_time=_now_utc().isoformat(),
         )
@@ -398,7 +411,7 @@ class LatticeSink:
         mil_view = MilView()  # omit env & disposition
 
         provenance = Provenance(
-            data_type="home-position",
+            data_type="wardragon-detection",
             integration_name=self.source_name,
             source_update_time=_now_utc().isoformat(),
         )

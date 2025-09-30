@@ -1,0 +1,39 @@
+{
+    "timestamp": 1759201246.5410693,
+    "gps_data": {
+        "latitude": 42.216568333,
+        "longitude": -70.902473333,
+        "altitude": 22.7,
+        "speed": 0.386,
+        "track": 19.18
+    },
+    "serial_number": "BN95H4CG01058",
+    "system_stats": {
+        "cpu_usage": 19.8,
+        "memory": {
+            "total": 8095731712,
+            "available": 2290733056,
+            "percent": 71.7,
+            "used": 5041823744,
+            "free": 746704896,
+            "active": 3423363072,
+            "inactive": 2734292992,
+            "buffers": 325615616,
+            "cached": 1981587456,
+            "shared": 461459456,
+            "slab": 795742208
+        },
+        "disk": {
+            "total": 250375438336,
+            "used": 72847892480,
+            "free": 164734640128,
+            "percent": 30.7
+        },
+        "temperature": 51.0,
+        "uptime": 12340.712999105453
+    },
+    "ant_sdr_temps": {
+        "pluto_temp": 43.0,
+        "zynq_temp": 50.2
+    }
+}
