@@ -36,7 +36,7 @@ try:
     from anduril import Lattice
     from anduril import ( 
         Location, Position, MilView, Ontology, Provenance, Aliases, Classification, ClassificationInformation, 
-        Health, HealthComponent, ComponentMessage
+        Health, ComponentHealth, ComponentMessage
     )
     # Optional enum (names differ across SDKs; used only for AIR)
     try:
@@ -88,6 +88,28 @@ def _air_env_value():
             if hasattr(MilEnvironment, attr):
                 return getattr(MilEnvironment, attr)
     return "ENVIRONMENT_AIR"
+
+def _bearing_to_enu_quaternion(bearing_deg: float) -> Dict[str, float]:
+    """
+    Convert a bearing (degrees clockwise from true north) to an ENU quaternion.
+
+    Note: this is a simple conversion assuming zero roll/pitch. More complex
+    attitude data would require a full conversion.
+    """
+    import math
+
+    # Convert bearing to radians and adjust for ENU frame
+    yaw_rad = math.radians((450.0 - bearing_deg) % 360.0)
+    cy = math.cos(yaw_rad * 0.5)
+    sy = math.sin(yaw_rad * 0.5)
+
+    # Assuming roll = pitch = 0
+    return {
+        "w": cy,
+        "x": 0.0,
+        "y": 0.0,
+        "z": sy,
+    }
 
 # ────────────────────────────────────────────────────────────────────────────────
 # LatticeSink (minimal publish)
@@ -166,11 +188,33 @@ class LatticeSink:
         if not self._rate_ok("wd"):
             return
 
+
         serial = str(s.get("serial_number", "unknown")) or "unknown"
         gps = s.get("gps_data", {}) or {}
         lat = gps.get("latitude")
         lon = gps.get("longitude")
         hae = gps.get("altitude")
+        stats = s.get("system_stats", {}) or {}
+        cpu_usage = stats.get("cpu_usage")
+        memory = stats.get("memory", {}) or {}
+        mem_percent = memory.get("percent")
+        disk = stats.get("disk", {}) or {}
+        disk_percent = disk.get("percent")
+        temperature = stats.get("temperature")
+        if isinstance(stats.get("uptime"), (int, float)):
+            uptime = round(stats.get("uptime"),0)/60 # in minutes
+        else:
+            uptime = "unknown"
+        
+        ant_pluto_temp = None
+        ant_zynq_temp = None
+        ant_sdr_temps = s.get("ant_sdr_temps", {}) or {}
+        if isinstance(ant_sdr_temps.get("pluto_temp"), (int, float)):
+            ant_pluto_temp = ant_sdr_temps.get("pluto_temp")
+        if isinstance(ant_sdr_temps.get("zynq_temp"), (int, float)):
+            ant_zynq_temp = ant_sdr_temps.get("zynq_temp")
+
+
         if not _valid_latlon(lat, lon):
             return
 
@@ -210,7 +254,8 @@ class LatticeSink:
 
         # TODO: determine what to use for connection status
         # TODO: add system health parameters and warning ranges for each
-        
+
+
         health=Health(
             connection_status="CONNECTION_STATUS_ONLINE",
             health_status="HEALTH_STATUS_HEALTHY",
@@ -218,47 +263,89 @@ class LatticeSink:
                 ComponentHealth(
                     id="cpu",
                     name="CPU",
-                    health="HEALTH_STATUS_WARN",
-                    messages=[
-                        ComponentMessage(
-                            status="HEALTH_STATUS_WARN",
-                            message="97 %"
-                        )
-                    ],
-                    update_time=latest_timestamp
-                ),
-                ComponentHealth(
-                    id="memory",
-                    name="Memory",
                     health="HEALTH_STATUS_HEALTHY",
                     messages=[
                         ComponentMessage(
-                            status="HEALTH_STATUS_WARN",
-                            message="Used: 3.1 GB"
-                        ),
-                        ComponentMessage(
-                            status="HEALTH_STATUS_WARN",
-                            message="Free: 0.75 GB"
-                        ),
+                            status="HEALTH_STATUS_HEALTHY",
+                            message=(f"{cpu_usage}%")
+                        )
                     ],
-                    update_time=latest_timestamp
+                    update_time=_now_utc()
                 ),
                 ComponentHealth(
-                    id="disk",
+                    id="memory",
+                    name="Memory Percent",
+                    health="HEALTH_STATUS_HEALTHY",
+                    messages=[
+                        ComponentMessage(
+                            status="HEALTH_STATUS_HEALTHY",
+                            message=(f"{mem_percent}%")
+                        )
+                    ],
+                    update_time=_now_utc()
+                ),
+                ComponentHealth(
+                    id="disk_percent",
                     name="Disk",
                     health="HEALTH_STATUS_HEALTHY",
                     messages=[
                         ComponentMessage(
                             status="HEALTH_STATUS_HEALTHY",
-                            message="Total: 500 GB"
-                        ),
-                        ComponentMessage(
-                            status="HEALTH_STATUS_HEALTHY",
-                            message="Used: 125 GB"
+                            message=(f"{disk_percent}%")
                         )
                     ],
-                    update_time=latest_timestamp                        
+                    update_time=_now_utc()
                 ),
+                ComponentHealth(
+                    id="temperature",
+                    name="Temperature",
+                    health="HEALTH_STATUS_HEALTHY",
+                    messages=[
+                        ComponentMessage(
+                            status="HEALTH_STATUS_HEALTHY",
+                            message=(f"{temperature}ºC")
+                        )
+                    ],
+                    update_time=_now_utc()
+                ),
+                ComponentHealth(
+                    id="uptime",
+                    name="Uptime",
+                    health="HEALTH_STATUS_HEALTHY",
+                    messages=[
+                        ComponentMessage(
+                            status="HEALTH_STATUS_HEALTHY",
+                            message=(f"{uptime} minutes")
+                        )
+                    ],
+                    update_time=_now_utc()
+                ),
+                ComponentHealth(
+                    id="ant_pluto_temp",
+                    name="Ant Pluto Temp",
+                    health="HEALTH_STATUS_HEALTHY",
+                    messages=[
+                        ComponentMessage(
+                            status="HEALTH_STATUS_HEALTHY",
+                            message=(f"{ant_pluto_temp}ºC")
+                        )
+                    ],
+                    update_time=_now_utc()
+                ),
+                ComponentHealth(
+                    id="ant_zynq_temp",
+                    name="Ant Zynq Temp",
+                    health="HEALTH_STATUS_HEALTHY",
+                    messages=[
+                        ComponentMessage(
+                            status="HEALTH_STATUS_HEALTHY",
+                            message=(f"{ant_zynq_temp}ºC")
+                        )
+                    ],
+                    update_time=_now_utc()
+                ) 
+            ]
+        )
 
         try:
             self.client.entities.publish_entity(
@@ -271,10 +358,12 @@ class LatticeSink:
                 aliases=aliases,
                 health=health,
                 expiry_time=expiry_time,
-                data_classification=Classification(
-                    default=ClassificationInformation(
-                        level="CLASSIFICATION_LEVELS_UNCLASSIFIED"
-                    )
+                data_classification=(
+                    Classification(
+                        default=ClassificationInformation(
+                            level="CLASSIFICATION_LEVELS_UNCLASSIFIED"
+                        )
+                    ) if Classification is not None and ClassificationInformation is not None else None
                 ),
                 request_options=self._req_opts,
             )
@@ -295,11 +384,39 @@ class LatticeSink:
             return getattr(d, key, default)
 
         entity_id = str(g("id", "unknown")) or "unknown"
+        id_type = str(g("id_type", "Unknown")) or "Unknown"
+        caa = str(g("caa", "") or "").strip()
+        alias = f"{id_type}: {caa}"
+        mac = str(g("mac", "") or "").strip()
+        rssi = g("rssi")
+        ua_type = str(g("ua_type_name", "Unknown")) or "Unknown"
+        ua_type_name = str(g("ua_type_name", "Unknown")) or "Unknown"
+        speed = g("speed")
+        vspeed = g("vspeed")
+        alt = g("alt")
+        height = g("height")
+        op_status = str(g("op_status", "") or "").strip()
+        height_type = str(g("height_type", "") or "").strip()
+        speed_multiplier = g("speed_multiplier")
+        operator_id = str(g("operator_id", "") or "").strip()
+        operator_id_type = str(g("operator_id_type", "") or "").strip()
+        operator = ""
+        if operator_id and operator_id_type:
+            operator = f"Operator {operator_id_type}: {operator_id}"
+        
+        freq = g("freq")
+        
+
         lat = g("lat")
         lon = g("lon")
         hae = g("alt")
         if not _valid_latlon(lat, lon):
             return
+
+
+#     "operator_id_type": "Operator ID",
+#     "operator_id": ""
+# }
 
         location = Location(
             position=Position(
@@ -307,13 +424,23 @@ class LatticeSink:
                 longitude_degrees=float(lon)
             )
         )
+
+        if isinstance(speed, (int, float)) and speed >= 0.0:
+            location.speed_mps = float(speed) 
+
+        direction = g("direction")
+        heading = 0.0
+        if isinstance(direction, (int, float)) and 0.0 <= float(direction) <= 360.0:
+            heading = _bearing_to_enu_quaternion(direction)
+        
+
         try:
             if hae is not None:
                 location.position.height_above_ellipsoid_meters = float(hae)  # type: ignore[attr-defined]
         except Exception:
             pass
 
-        aliases = Aliases(name=entity_id)
+        aliases = Aliases(name=alias)
         ontology = Ontology(
             template="TEMPLATE_TRACK", 
             platform_type="Small UAS"
@@ -327,7 +454,7 @@ class LatticeSink:
         provenance = Provenance(
             data_type="wardragon-detection",
             integration_name=self.source_name,
-            source_update_time=_now_utc().isoformat(),
+            source_update_time=_now_utc().isoformat()
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=5)
 
@@ -400,7 +527,7 @@ class LatticeSink:
         provenance = Provenance(
             data_type="wardragon-detection",
             integration_name=self.source_name,
-            source_update_time=_now_utc().isoformat(),
+            source_update_time=_now_utc(),
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=30)
 
