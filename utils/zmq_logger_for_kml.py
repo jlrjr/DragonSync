@@ -158,6 +158,8 @@ def main():
     parser = argparse.ArgumentParser(description="ZMQ logger (rate-limited) with home/metadata columns.")
     parser.add_argument("--zmq-host", default="127.0.0.1")
     parser.add_argument("--zmq-port", type=int, default=4224)
+    parser.add_argument("--zmq-status-port", type=int, default=None, help="ZMQ port for system status (default: disabled)")
+    parser.add_argument("--include-system-location", action="store_true", help="Include system location in CSV (requires --zmq-status-port)")
     parser.add_argument("--output-csv", default=None, help="Output CSV file path. If not specified, creates timestamped file.")
     parser.add_argument("--flush-interval", type=float, default=5.0, help="Flush CSV buffer interval (seconds)")
     parser.add_argument("--rcv-hwm", type=int, default=0, help="ZMQ receive high water mark (0=unlimited)")
@@ -195,9 +197,22 @@ def main():
     socket.connect(f"tcp://{args.zmq_host}:{args.zmq_port}")
     socket.setsockopt_string(zmq.SUBSCRIBE, "")
 
+    # Optional status socket for system location
+    status_socket = None
+    if args.include_system_location and args.zmq_status_port:
+        status_socket = context.socket(zmq.SUB)
+        status_socket.connect(f"tcp://{args.zmq_host}:{args.zmq_status_port}")
+        status_socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        logger.info(f"Connected to system status ZMQ at tcp://{args.zmq_host}:{args.zmq_status_port}")
+    elif args.include_system_location:
+        logger.warning("--include-system-location set but no --zmq-status-port provided. System location will be 0.0")
+
     poller = zmq.Poller()
     poller.register(socket, zmq.POLLIN)
+    if status_socket:
+        poller.register(status_socket, zmq.POLLIN)
 
+    # Build headers based on whether system location is included
     headers = [
         # base
         "timestamp","drone_id","lat","lon","alt","speed","rssi","mac","description","pilot_lat","pilot_lon",
@@ -207,6 +222,8 @@ def main():
         "vertical_accuracy","horizontal_accuracy","baro_accuracy","speed_accuracy",
         "timestamp_src","timestamp_accuracy","index","runtime","caa","freq"
     ]
+    if args.include_system_location:
+        headers.extend(["system_id","system_lat","system_lon","system_alt"])
 
     # Check if file exists and has content to determine if we need to write headers
     file_exists = os.path.exists(output_csv)
@@ -222,6 +239,9 @@ def main():
     last_flush = time.time()
     last_logged = {}  # drone_id -> snapshot
 
+    # Track latest system location and ID
+    system_location = {"id": "", "lat": 0.0, "lon": 0.0, "alt": 0.0}
+
     th = {
         "min_log_interval": max(0.0, args.min_log_interval),
         "min_move_m": max(0.0, args.min_move_m),
@@ -232,6 +252,24 @@ def main():
     try:
         while True:
             socks = dict(poller.poll(timeout=1000))
+
+            # Handle system status messages
+            if status_socket and status_socket in socks and socks[status_socket] == zmq.POLLIN:
+                try:
+                    status_msg = status_socket.recv_json()
+                    # Extract GPS data and serial number from wardragon_monitor format
+                    if "serial_number" in status_msg:
+                        system_location["id"] = status_msg.get("serial_number", "")
+                    if "gps_data" in status_msg:
+                        gps = status_msg["gps_data"]
+                        system_location["lat"] = gps.get("latitude", 0.0) if gps.get("latitude") != "N/A" else 0.0
+                        system_location["lon"] = gps.get("longitude", 0.0) if gps.get("longitude") != "N/A" else 0.0
+                        system_location["alt"] = gps.get("altitude", 0.0) if gps.get("altitude") != "N/A" else 0.0
+                        logger.debug(f"Updated system location: {system_location}")
+                except Exception as e:
+                    logger.warning(f"Status recv_json failed: {e}")
+
+            # Handle drone telemetry messages
             if socket in socks and socks[socket] == zmq.POLLIN:
                 try:
                     raw = socket.recv_json()
@@ -264,6 +302,8 @@ def main():
                         parsed["timestamp"], parsed["timestamp_accuracy"], parsed["index"], parsed["runtime"],
                         parsed["caa"], parsed["freq"]
                     ]
+                    if args.include_system_location:
+                        row.extend([system_location["id"], system_location["lat"], system_location["lon"], system_location["alt"]])
                     buf.append(row)
                     last_logged[drone_id] = cur
                     logger.debug(f"Queued log for {drone_id}")
@@ -285,8 +325,11 @@ def main():
         csv_file.close()
         try:
             socket.close(0)
+            if status_socket:
+                status_socket.close(0)
         finally:
             context.term()
 
 if __name__ == "__main__":
     main()
+    
