@@ -4,6 +4,7 @@ import logging
 import time
 import zmq
 import csv
+import os
 from datetime import datetime
 from math import radians, sin, cos, asin, sqrt
 
@@ -157,16 +158,16 @@ def main():
     parser = argparse.ArgumentParser(description="ZMQ logger (rate-limited) with home/metadata columns.")
     parser.add_argument("--zmq-host", default="127.0.0.1")
     parser.add_argument("--zmq-port", type=int, default=4224)
-    parser.add_argument("--output-csv", default="drone_log.csv")
-    parser.add_argument("--flush-interval", type=float, default=5.0)
-    parser.add_argument("--rcv-hwm", type=int, default=0, help="0=unlimited")
-    parser.add_argument("--conflate", action="store_true", help="Keep only latest (drop backlog)")
+    parser.add_argument("--output-csv", default=None, help="Output CSV file path. If not specified, creates timestamped file.")
+    parser.add_argument("--flush-interval", type=float, default=5.0, help="Flush CSV buffer interval (seconds)")
+    parser.add_argument("--rcv-hwm", type=int, default=0, help="ZMQ receive high water mark (0=unlimited)")
+    parser.add_argument("--conflate", action="store_true", help="Keep only latest message (drop backlog)")
 
     # Per-drone throttling
-    parser.add_argument("--min-log-interval", type=float, default=30.0)
-    parser.add_argument("--min-move-m", type=float, default=25.0)
-    parser.add_argument("--min-alt-change", type=float, default=5.0)
-    parser.add_argument("--min-speed-change", type=float, default=1.0)
+    parser.add_argument("--min-log-interval", type=float, default=30.0, help="Minimum time between logs for same drone (seconds)")
+    parser.add_argument("--min-move-m", type=float, default=25.0, help="Minimum movement to trigger log (meters)")
+    parser.add_argument("--min-alt-change", type=float, default=5.0, help="Minimum altitude change to trigger log (meters)")
+    parser.add_argument("--min-speed-change", type=float, default=1.0, help="Minimum speed change to trigger log (m/s)")
 
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -175,6 +176,14 @@ def main():
                         format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger(__name__)
 
+    # Generate timestamped filename if --output-csv not specified
+    if args.output_csv is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_csv = f"drone_log_{timestamp}.csv"
+    else:
+        output_csv = args.output_csv
+
+    logger.info(f"Output CSV: {output_csv}")
     logger.info(f"Connecting to ZMQ at tcp://{args.zmq_host}:{args.zmq_port}")
 
     context = zmq.Context()
@@ -199,10 +208,15 @@ def main():
         "timestamp_src","timestamp_accuracy","index","runtime","caa","freq"
     ]
 
-    csv_file = open(args.output_csv, 'a', newline='')
+    # Check if file exists and has content to determine if we need to write headers
+    file_exists = os.path.exists(output_csv)
+    file_is_empty = not file_exists or os.path.getsize(output_csv) == 0
+    csv_file = open(output_csv, 'a', newline='')
     csv_writer = csv.writer(csv_file)
-    if csv_file.tell() == 0:
+    if file_is_empty:
+        logger.info("Writing CSV headers to new file")
         csv_writer.writerow(headers)
+        csv_file.flush()  # Ensure header is written immediately
 
     buf = []
     last_flush = time.time()
