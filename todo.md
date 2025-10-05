@@ -1,5 +1,4 @@
 # Things to consider
-* add logging - run as new process `python utils/zmq_logger_for_kml.py --zmq-port 4224 --output-csv drone_log.csv`, then checkout generate_kml.py for visualizing tracks
 * add health data to system
 * add track heading and speed for drone
 * entity grouping for drone, pilot, home
