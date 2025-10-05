@@ -131,8 +131,8 @@ def main():
     parser = argparse.ArgumentParser(description="ZMQ logger to record drone data for future KML generation.")
     parser.add_argument("--zmq-host", default="127.0.0.1", help="ZMQ server host")
     parser.add_argument("--zmq-port", type=int, default=4224, help="ZMQ server port")
-    parser.add_argument("--output-csv", default="drone_log.csv", 
-                        help="Path to CSV file where parsed drone data is appended")
+    parser.add_argument("--output-csv", default=None,
+                        help="Path to CSV file where parsed drone data is appended. If not specified, creates a timestamped file.")
     parser.add_argument("--flush-interval", type=float, default=5.0, 
                         help="Flush CSV buffer every X seconds")
     parser.add_argument("--debug", action="store_true", help="Enable debug-level logging")
@@ -144,6 +144,16 @@ def main():
     )
     logger = logging.getLogger(__name__)
 
+    # Generate timestamped filename if --output-csv not specified
+    if args.output_csv is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"drone_log_{timestamp}.csv"
+        file_mode = 'w'  # Create new file
+    else:
+        output_filename = args.output_csv
+        file_mode = 'a'  # Append to existing file
+
+    logger.info(f"Writing to CSV file: {output_filename}")
     logger.info(f"Connecting to ZMQ at tcp://{args.zmq_host}:{args.zmq_port}")
 
     context = zmq.Context()
@@ -155,9 +165,9 @@ def main():
     poller.register(socket, zmq.POLLIN)
 
     # Prepare CSV
-    csv_file = open(args.output_csv, 'a', newline='')
+    csv_file = open(output_filename, file_mode, newline='')
     csv_writer = csv.writer(csv_file)
-    # If the file is empty, write a header row
+    # If the file is empty or newly created, write a header row
     if csv_file.tell() == 0:
         csv_writer.writerow([
             "timestamp",
