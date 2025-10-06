@@ -34,9 +34,10 @@ import os
 try:
     import anduril as _anduril_mod  # for __version__
     from anduril import Lattice
-    from anduril import ( 
-        Location, Position, MilView, Ontology, Provenance, Aliases, Classification, ClassificationInformation, 
-        Health, ComponentHealth, ComponentMessage
+    from anduril import (
+        Location, Position, MilView, Ontology, Provenance, Aliases, Classification, ClassificationInformation,
+        Health, ComponentHealth, ComponentMessage, VisualDetails, RangeRings, Quaternion, 
+        Relationships, Relationship, RelationshipType, TrackedBy, Sensors, Sensor 
     )
     # Optional enum (names differ across SDKs; used only for AIR)
     try:
@@ -57,6 +58,7 @@ except Exception as e:
     Classification = ClassificationInformation = None  # type: ignore
     MilEnvironment = None  # type: ignore
     RequestOptions = None  # type: ignore
+    Relationships = None  # type: ignore
     _SDK_VERSION = "unknown"
 else:
     _IMPORT_ERROR = None
@@ -173,6 +175,9 @@ class LatticeSink:
         }
         self._last_send = {k: 0.0 for k in self._periods.keys()}
 
+        # Store system entity_id for use in relationships
+        self._system_entity_id: Optional[str] = None
+
     def _rate_ok(self, key: str) -> bool:
         now = time.time()
         if now - self._last_send.get(key, 0.0) >= self._periods.get(key, 0.0):
@@ -202,7 +207,7 @@ class LatticeSink:
         disk_percent = disk.get("percent")
         temperature = stats.get("temperature")
         if isinstance(stats.get("uptime"), (int, float)):
-            uptime = round(stats.get("uptime"),0)/60 # in minutes
+            uptime = int(stats.get("uptime")/60) # in minutes
         else:
             uptime = "unknown"
         
@@ -221,6 +226,9 @@ class LatticeSink:
         entity_id = f"wardragon-{serial}"
         alias_name = f"WarDragon {serial}"
 
+        # Store system entity_id for use in entity relationships
+        self._system_entity_id = entity_id
+
         location = Location(
             position=Position(
                 latitude_degrees=float(lat),
@@ -232,6 +240,7 @@ class LatticeSink:
                 location.position.height_above_ellipsoid_meters = float(hae)  # type: ignore[attr-defined]
         except Exception:
             pass
+
 
         ontology = Ontology(
             template="TEMPLATE_ASSET", 
@@ -251,6 +260,12 @@ class LatticeSink:
             name=alias_name
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=10)
+
+        range_rings = RangeRings(
+            min_distance_m = 1.0,
+            max_distance_m = 5.0,
+            ring_count = 5
+        )
 
         # TODO: determine what to use for connection status
         # TODO: add system health parameters and warning ranges for each
@@ -342,6 +357,9 @@ class LatticeSink:
                             message=(f"{ant_zynq_temp}ºC")
                         )
                     ],
+                    visual_details=VisualDetails(
+                        range_rings=range_rings
+                    ),
                     update_time=_now_utc()
                 ) 
             ]
@@ -405,8 +423,7 @@ class LatticeSink:
             operator = f"Operator {operator_id_type}: {operator_id}"
         
         freq = g("freq")
-        
-
+    
         lat = g("lat")
         lon = g("lon")
         hae = g("alt")
@@ -418,27 +435,36 @@ class LatticeSink:
 #     "operator_id": ""
 # }
 
-        location = Location(
-            position=Position(
-                latitude_degrees=float(lat), 
-                longitude_degrees=float(lon)
-            )
-        )
-
+        _log.info(f"drone speed reported: {speed}")
+        speed_mps = 0.0
         if isinstance(speed, (int, float)) and speed >= 0.0:
-            location.speed_mps = float(speed) 
+            speed_mps = float(speed)
 
         direction = g("direction")
-        heading = 0.0
+        _log.info(f"drone direction reported: {direction}")
+        heading = Quaternion(x=0.0, y=0.0)
         if isinstance(direction, (int, float)) and 0.0 <= float(direction) <= 360.0:
             heading = _bearing_to_enu_quaternion(direction)
-        
+        _log.info(f"calculated heading_enu from direction: x={heading.x}, y={heading.y}")
 
-        try:
-            if hae is not None:
-                location.position.height_above_ellipsoid_meters = float(hae)  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        position = Position(
+            latitude_degrees=float(lat),
+            longitude_degrees=float(lon)
+        )
+        if hae is not None:
+            try:
+                position.height_above_ellipsoid_meters = float(hae)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+
+        location = Location(
+            position=position,
+            speed_mps=speed_mps,
+            attitude_enu=Quaternion(
+                x=heading.x,
+                y=heading.y
+            )
+        )
 
         aliases = Aliases(name=alias)
         ontology = Ontology(
@@ -458,7 +484,33 @@ class LatticeSink:
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=5)
 
-        # TODO: add optional track heading, speed, etc. if available
+        # Add relationship to system if available
+        relationships = None
+        if self._system_entity_id and Relationships is not None:
+            try:
+                relationships=Relationships(
+                    relationships=[
+                        Relationship(
+                            related_entity_id=self._system_entity_id,
+                            relationship_type=RelationshipType(
+                                tracked_by=TrackedBy(
+                                    actively_tracking_sensors=Sensors(
+                                        sensors=[
+                                            Sensor(
+                                                sensor_id="wardragon-antenna",
+                                                operational_state="OPERATIONAL_STATE_OPERATIONAL",
+                                                sensor_type="SENSOR_TYPE_RF",
+                                                sensor_description="WarDragon Antenna"
+                                            )
+                                        ]
+                                    )
+                                )
+                            )
+                        )
+                    ]
+                )
+            except Exception as e:
+                _log.debug("Could not create relationship for drone: %s", e)
 
         try:
             self.client.entities.publish_entity(
@@ -470,6 +522,7 @@ class LatticeSink:
                 provenance=provenance,
                 aliases=aliases,
                 expiry_time=expiry_time,
+                relationships=relationships,
                 data_classification=Classification(
                     default=ClassificationInformation(level="CLASSIFICATION_LEVELS_UNCLASSIFIED")
                 ),
@@ -531,6 +584,34 @@ class LatticeSink:
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=30)
 
+        # Add relationship to system if available
+        relationships = None
+        if self._system_entity_id and Relationships is not None:
+            try:
+                relationships=Relationships(
+                    relationships=[
+                        Relationship(
+                            related_entity_id=self._system_entity_id,
+                            relationship_type=RelationshipType(
+                                tracked_by=TrackedBy(
+                                    actively_tracking_sensors=Sensors(
+                                        sensors=[
+                                            Sensor(
+                                                sensor_id="wardragon-antenna",
+                                                operational_state="OPERATIONAL_STATE_OPERATIONAL",
+                                                sensor_type="SENSOR_TYPE_RF",
+                                                sensor_description="WarDragon Antenna"
+                                            )
+                                        ]
+                                    )
+                                )
+                            )
+                        )
+                    ]
+                )
+            except Exception as e:
+                _log.debug("Could not create relationship for pilot: %s", e)
+
         try:
             self.client.entities.publish_entity(
                 entity_id=entity_id,
@@ -541,6 +622,7 @@ class LatticeSink:
                 provenance=provenance,
                 aliases=Aliases(name=str(display_name)),
                 expiry_time=expiry_time,
+                relationships=relationships,
                 data_classification=Classification(
                     default=ClassificationInformation(level="CLASSIFICATION_LEVELS_UNCLASSIFIED")
                 ),
@@ -602,6 +684,34 @@ class LatticeSink:
         )
         expiry_time = _now_utc() + dt.timedelta(hours=4)
 
+        # Add relationship to system if available
+        relationships = None
+        if self._system_entity_id and Relationships is not None:
+            try:
+                 relationships=Relationships(
+                    relationships=[
+                        Relationship(
+                            related_entity_id=self._system_entity_id,
+                            relationship_type=RelationshipType(
+                                tracked_by=TrackedBy(
+                                    actively_tracking_sensors=Sensors(
+                                        sensors=[
+                                            Sensor(
+                                                sensor_id="wardragon-antenna",
+                                                operational_state="OPERATIONAL_STATE_OPERATIONAL",
+                                                sensor_type="SENSOR_TYPE_RF",
+                                                sensor_description="WarDragon Antenna"
+                                            )
+                                        ]
+                                    )
+                                )
+                            )
+                        )
+                    ]
+                )
+            except Exception as e:
+                _log.debug("Could not create relationship for home: %s", e)
+
         try:
             self.client.entities.publish_entity(
                 entity_id=entity_id,
@@ -612,6 +722,7 @@ class LatticeSink:
                 provenance=provenance,
                 aliases=Aliases(name=str(display_name)),
                 expiry_time=expiry_time,
+                relationships=relationships,
                 data_classification=Classification(
                     default=ClassificationInformation(level="CLASSIFICATION_LEVELS_UNCLASSIFIED")
                 ),
