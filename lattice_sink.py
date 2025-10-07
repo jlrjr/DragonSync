@@ -91,7 +91,7 @@ def _air_env_value():
                 return getattr(MilEnvironment, attr)
     return "ENVIRONMENT_AIR"
 
-def _bearing_to_enu_quaternion(bearing_deg: float) -> Dict[str, float]:
+def _bearing_to_enu_quaternion(bearing_deg: float) -> Quaternion:
     """
     Convert a bearing (degrees clockwise from true north) to an ENU quaternion.
 
@@ -106,12 +106,12 @@ def _bearing_to_enu_quaternion(bearing_deg: float) -> Dict[str, float]:
     sy = math.sin(yaw_rad * 0.5)
 
     # Assuming roll = pitch = 0
-    return {
-        "w": cy,
-        "x": 0.0,
-        "y": 0.0,
-        "z": sy,
-    }
+    return Quaternion(
+        w=cy,
+        x=0.0,
+        y=0.0,
+        z=sy
+    )
 
 # ────────────────────────────────────────────────────────────────────────────────
 # LatticeSink (minimal publish)
@@ -427,6 +427,7 @@ class LatticeSink:
         lat = g("lat")
         lon = g("lon")
         hae = g("alt")
+        _log.info(f"Drone altitude: alt={alt}, hae={hae}, height={height}")
         if not _valid_latlon(lat, lon):
             return
 
@@ -447,23 +448,24 @@ class LatticeSink:
             heading = _bearing_to_enu_quaternion(direction)
         _log.info(f"calculated heading_enu from direction: x={heading.x}, y={heading.y}")
 
-        position = Position(
-            latitude_degrees=float(lat),
-            longitude_degrees=float(lon)
-        )
+        # Create position with altitude if available
+        position_kwargs = {
+            "latitude_degrees": float(lat),
+            "longitude_degrees": float(lon)
+        }
         if hae is not None:
             try:
-                position.height_above_ellipsoid_meters = float(hae)  # type: ignore[attr-defined]
-            except Exception:
-                pass
+                position_kwargs["altitude_hae_meters"] = float(hae)
+                _log.info(f"Setting altitude_hae_meters to {float(hae)}")
+            except Exception as e:
+                _log.warning(f"Failed to set altitude: {e}")
+
+        position = Position(**position_kwargs)
 
         location = Location(
             position=position,
             speed_mps=speed_mps,
-            attitude_enu=Quaternion(
-                x=heading.x,
-                y=heading.y
-            )
+            attitude_enu=heading
         )
 
         aliases = Aliases(name=alias)
