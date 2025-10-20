@@ -123,7 +123,7 @@ class LatticeSink:
     - Uses the environment token (Authorization) and optional sandbox token
       via 'anduril-sandbox-authorization: Bearer <token>'.
     - WarDragon/pilot/home: omit environment to avoid enum quirks; disposition
-      only where we know it’s safe.
+      only where we know it's safe.
     - Drone: set environment=AIR and disposition=NEUTRAL.
     """
 
@@ -261,16 +261,7 @@ class LatticeSink:
         )
         expiry_time = _now_utc() + dt.timedelta(minutes=10)
 
-        range_rings = RangeRings(
-            min_distance_m = 1.0,
-            max_distance_m = 5.0,
-            ring_count = 5
-        )
-
-        # TODO: determine what to use for connection status
-        # TODO: add system health parameters and warning ranges for each
-
-
+        # publish wardragon system health
         health=Health(
             connection_status="CONNECTION_STATUS_ONLINE",
             health_status="HEALTH_STATUS_HEALTHY",
@@ -357,9 +348,6 @@ class LatticeSink:
                             message=(f"{ant_zynq_temp}ºC")
                         )
                     ],
-                    visual_details=VisualDetails(
-                        range_rings=range_rings
-                    ),
                     update_time=_now_utc()
                 ) 
             ]
