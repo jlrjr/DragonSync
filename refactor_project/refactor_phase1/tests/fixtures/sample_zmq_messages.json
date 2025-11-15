@@ -1,0 +1,87 @@
+{
+  "remote_id_ble_basic": {
+    "BasicID": {
+      "id_type": 3,
+      "ua_type": 1,
+      "uas_id": "1234567890ABCDEF"
+    },
+    "Location": {
+      "latitude": 42.3601,
+      "longitude": -71.0589,
+      "altitude_geo": 50.5,
+      "height_agl": 45.2,
+      "speed": 12.5,
+      "direction": 180,
+      "vert_speed": 2.3
+    },
+    "timestamp": "2024-01-15T12:34:56Z",
+    "rssi": -65.5,
+    "mac": "AA:BB:CC:DD:EE:FF"
+  },
+  
+  "remote_id_wifi": {
+    "BasicID": {
+      "id_type": 2,
+      "ua_type": 2,
+      "uas_id": "WIFI-DRONE-001"
+    },
+    "Location": {
+      "latitude": 42.3605,
+      "longitude": -71.0592,
+      "altitude_geo": 120.0,
+      "height_agl": 115.0,
+      "speed": 8.0,
+      "direction": 45,
+      "vert_speed": 0.5
+    },
+    "OperatorID": {
+      "operator_id": "PILOT-12345"
+    },
+    "System": {
+      "operator_lat": 42.3600,
+      "operator_lon": -71.0590,
+      "area_count": 1,
+      "area_radius": 100,
+      "area_ceiling": 150,
+      "area_floor": 0,
+      "timestamp": "2024-01-15T12:35:00Z"
+    },
+    "timestamp": "2024-01-15T12:35:00Z",
+    "rssi": -72.0,
+    "mac": "11:22:33:44:55:66",
+    "frequency": 2437.0
+  },
+  
+  "dji_detection": {
+    "type": "dji",
+    "serial_number": "DJI-SN-9876543210",
+    "latitude": 42.3610,
+    "longitude": -71.0595,
+    "altitude": 75.0,
+    "height": 70.0,
+    "speed": 15.2,
+    "heading": 270,
+    "vertical_speed": -1.5,
+    "home_lat": 42.3608,
+    "home_lon": -71.0593,
+    "pilot_lat": 42.3609,
+    "pilot_lon": -71.0594,
+    "rssi": -58.0,
+    "timestamp": "2024-01-15T12:36:00Z"
+  },
+  
+  "system_status": {
+    "type": "wardragon_status",
+    "serial_number": "WD-12345",
+    "latitude": 42.3600,
+    "longitude": -71.0590,
+    "altitude": 5.0,
+    "temperature": 45.3,
+    "cpu_usage": 35.2,
+    "memory_usage": 62.8,
+    "disk_usage": 48.1,
+    "timestamp": "2024-01-15T12:37:00Z",
+    "gps_lock": true,
+    "satellites": 12
+  }
+}

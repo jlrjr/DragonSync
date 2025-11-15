@@ -1,0 +1,76 @@
+# DragonSync Configuration Example
+# Copy this to config.ini and customize for your setup
+
+[SETTINGS]
+# ZMQ inputs (WarDragon defaults)
+zmq_host = 127.0.0.1
+zmq_port = 4224
+zmq_status_port = 4225
+
+# TAK Server output (optional). Leave blank to disable
+tak_host = 
+tak_port = 8089
+tak_protocol = tcp
+tak_tls_p12 = 
+tak_tls_p12_pass = 
+tak_tls_skip_verify = true
+
+# Multicast CoT to ATAK (simple zero-server option)
+enable_multicast = true
+tak_multicast_addr = 239.2.3.1
+tak_multicast_port = 6969
+tak_multicast_interface = 0.0.0.0
+multicast_ttl = 1
+
+# Runtime behavior
+rate_limit = 3.0
+max_drones = 30
+inactivity_timeout = 60.0
+log_level = INFO
+
+# MQTT / Home Assistant (optional)
+mqtt_enabled = false
+mqtt_host = 127.0.0.1
+mqtt_port = 1883
+mqtt_topic = wardragon/drones
+mqtt_username = 
+mqtt_password = 
+mqtt_tls = false
+mqtt_ca_file = 
+mqtt_certfile = 
+mqtt_keyfile = 
+mqtt_tls_insecure = false
+
+# Per-drone MQTT topics for HA auto-discovery
+per_drone_enabled = true
+per_drone_base = wardragon/drone
+ha_enabled = true
+ha_prefix = homeassistant
+ha_device_base = wardragon_drone
+
+# Lattice (optional)
+lattice_enabled = false
+lattice_token = 
+lattice_base_url = 
+lattice_endpoint = 
+lattice_sandbox_token = 
+lattice_source_name = DragonSync
+lattice_drone_rate = 1.0
+lattice_wd_rate = 0.2
+
+# ADS-B / UAT (optional)
+adsb_enabled = false
+adsb_json_url = http://127.0.0.1:8080/?all_with_pos
+adsb_poll_interval = 1.0
+adsb_min_alt = 0
+adsb_max_alt = 0
+
+[gps]
+# If use_static_gps is true, use the values below as fixed position
+# Otherwise, DragonSync will attempt to use GPSD
+use_static_gps = false
+static_lat = 0.0
+static_lon = 0.0
+static_alt = 0.0
+gpsd_host = 127.0.0.1
+gpsd_port = 2947
