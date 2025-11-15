@@ -9,5 +9,6 @@ Pure data models with minimal business logic:
 """
 
 from .drone import Drone
+from .system_status import SystemStatus
 
-__all__ = ["Drone"]
+__all__ = ["Drone", "SystemStatus"]
