@@ -10,5 +10,16 @@ Pure data models with minimal business logic:
 
 from .drone import Drone
 from .system_status import SystemStatus
+from .location import Location, GeoPoint, validate_latitude, validate_longitude
+from .telemetry import TelemetryData, RemoteIdData
 
-__all__ = ["Drone", "SystemStatus"]
+__all__ = [
+    "Drone",
+    "SystemStatus",
+    "Location",
+    "GeoPoint",
+    "validate_latitude",
+    "validate_longitude",
+    "TelemetryData",
+    "RemoteIdData",
+]
