@@ -1,0 +1,27 @@
+# DragonSync Refactored - Dependencies
+
+# Core dependencies
+pyzmq>=25.0.0
+lxml>=4.9.0
+cryptography>=41.0.0
+
+# Optional dependencies for specific sinks
+paho-mqtt>=1.6.0         # MQTT sink
+requests>=2.31.0         # Lattice sink
+netifaces>=0.11.0        # Network interface resolution
+
+# Development and testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+pytest-asyncio>=0.21.0
+
+# Code quality
+black>=23.7.0
+isort>=5.12.0
+pylint>=2.17.0
+flake8>=6.1.0
+mypy>=1.5.0
+
+# Type stubs
+types-requests>=2.31.0
