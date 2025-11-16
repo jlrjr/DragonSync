@@ -1,0 +1,12 @@
+# Testing dependencies for DragonSync refactoring project
+# Install with: pip install -r test_requirements.txt
+
+# ZMQ for telemetry streaming
+pyzmq>=25.0.0
+
+# Testing framework
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# For compatibility testing
+dataclasses; python_version < '3.7'
