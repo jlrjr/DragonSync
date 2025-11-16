@@ -7,4 +7,7 @@ Parsers convert raw ZMQ messages into domain models:
 - SystemParser: System status parsing
 """
 
-__all__ = []
+from .base_parser import BaseParser
+from .drone_parser import DroneParser
+
+__all__ = ["BaseParser", "DroneParser"]
