@@ -32,7 +32,7 @@ import time
 import random
 import argparse
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Sample drone data templates
 DJI_DRONE_TEMPLATE = {
@@ -236,7 +236,7 @@ class DroneSimulator:
                     "op_status": "AIRBORNE",
                     "height_type": "AGL",
                     "direction": int(self.heading),
-                    "timestamp": datetime.utcnow().isoformat() + "Z"
+                    "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                 }
             },
             {
@@ -281,7 +281,7 @@ class DroneSimulator:
                 "height_agl": round(self.alt * 0.7, 1),
                 "op_status": "AIRBORNE",
                 "direction": int(self.heading),
-                "timestamp": datetime.utcnow().isoformat() + "Z"
+                "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
             }
         }
 
