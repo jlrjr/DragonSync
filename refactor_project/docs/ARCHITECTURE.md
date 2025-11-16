@@ -2,11 +2,13 @@
 
 ## System Overview
 
-DragonSync is a drone detection gateway that:
-1. Receives drone telemetry from ZMQ feeds (WiFi RID, BLE RID, DJI)
-2. Parses and validates drone data
-3. Manages active drone state with rate limiting and timeouts
-4. Publishes drone data to multiple sinks (TAK/ATAK, MQTT, Lattice)
+DragonSync is a multi-source tracking gateway that:
+1. Receives telemetry from multiple sources (Remote ID, ADS-B, AIS, etc.)
+2. Parses and normalizes data into domain models
+3. Converts all sources to Cursor on Target (CoT) XML - the universal interchange format
+4. Distributes CoT to multiple output sinks (TAK/ATAK, MQTT, Lattice)
+
+**Key Architectural Decision**: CoT serves as the universal internal format, enabling linear scaling (N sources + M sinks) instead of N×M conversions.
 
 ## Architectural Layers
 
@@ -66,21 +68,23 @@ DragonSync is a drone detection gateway that:
 - Orchestration across sinks
 - Dependency injection for sinks
 
-### Layer 4: Output Adapters (Sinks)
+### Layer 5: Output Adapters (Sinks)
 ```
 ┌─────────────────────────────────────┐
 │            Sinks                    │
-│  • MqttSink                         │
-│  • LatticeSink                      │
-│  • TakSink                          │
+│  • TakSink (CoT passthrough)        │
+│  • MqttSink (CoT → JSON)            │
+│  • LatticeSink (CoT → Custom)       │
 │                                     │
-│  Depends on: Models, Clients        │
+│  Depends on: CoT XML input          │
 └─────────────────────────────────────┘
 ```
 
 **Characteristics**:
-- Implement BaseSink interface
-- Convert models → protocol formats
+- **Consume CoT XML as input** (universal format)
+- TAK Sink: Passes CoT through to multicast/TCP
+- MQTT Sink: Parses CoT → JSON for Home Assistant
+- Lattice Sink: Converts CoT → custom API format
 - Delegate I/O to clients
 - Handle sink-specific logic (HA discovery, etc.)
 
@@ -103,23 +107,26 @@ DragonSync is a drone detection gateway that:
 - Retry logic
 - TLS/SSL handling
 
-### Layer 6: Messaging (CoT Generation)
+### Layer 4: Messaging (Universal CoT Generation)
 ```
 ┌─────────────────────────────────────┐
-│          Messaging                  │
+│    Messaging (CoT Generator)        │
 │  • CotGenerator                     │
-│  • CotMessenger                     │
-│  • MulticastHandler                 │
+│  • generate_drone_event()           │
+│  • generate_aircraft_event() [FUTR] │
+│  • generate_vessel_event() [FUTURE] │
 │                                     │
-│  Depends on: Models, Clients        │
+│  Depends on: Models only            │
 └─────────────────────────────────────┘
 ```
 
 **Characteristics**:
-- CoT XML generation
-- Type mapping (UA type → CoT type)
-- Multicast group management
-- CoT protocol specifics
+- **UNIVERSAL CONVERTER**: All sources → CoT XML
+- MIL-STD-2525 type code mapping
+- Timezone-aware timestamps (Python 3.12+ compatible)
+- Dynamic CE/LE accuracy from telemetry
+- Pure function - no I/O, fully testable
+- CoT 2.0 XML schema compliant
 
 ### Layer 7: Configuration
 ```
@@ -139,41 +146,74 @@ DragonSync is a drone detection gateway that:
 - Typed configuration access
 - Environment overrides
 
-## Data Flow
+## Data Flow (CoT-Centric Architecture)
 
 ```
-┌──────────────┐
-│  ZMQ Source  │
-│  (Port 4224) │
-└──────┬───────┘
-       │ Raw JSON messages
-       ▼
-┌──────────────────┐
-│   DroneParser    │
-│  Parse & Validate│
-└──────┬───────────┘
-       │ Drone model
-       ▼
-┌──────────────────┐
-│  DroneManager    │
-│  • Rate limit    │
-│  • Timeout check │
-│  • State mgmt    │
-└──────┬───────────┘
-       │
-       ├────────────────┬─────────────────┬─────────────────┐
-       ▼                ▼                 ▼                 ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│ CotMessenger │ │  MqttSink    │ │ LatticeSink  │ │   TakSink    │
-│ (CoT XML)    │ │ (JSON+HA)    │ │ (JSON API)   │ │ (CoT XML)    │
-└──────┬───────┘ └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
-       │                │                 │                 │
-       ▼                ▼                 ▼                 ▼
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│TAK Multicast │ │ MQTT Broker  │ │ Lattice API  │ │  TAK Server  │
-│239.2.3.1:6969│ │   (MQTT)     │ │   (HTTPS)    │ │ (TCP/TLS)    │
-└──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
+                    ┌─────────────────────────────────┐
+                    │      INPUT SOURCES              │
+                    ├─────────────────────────────────┤
+┌──────────────┐    │  • Remote ID (ZMQ 4224)        │    ┌──────────────┐
+│   Future:    │    │  • ADS-B (1090MHz)   [FUTURE]  │    │   Future:    │
+│   ADS-B      │───▶│  • Ships/AIS         [FUTURE]  │◀───│   AIS/Ships  │
+│   Aircraft   │    │  • Ground Vehicles   [FUTURE]  │    │   Vessels    │
+└──────────────┘    └─────────────┬───────────────────┘    └──────────────┘
+                                  │
+                    ┌─────────────┴───────────────┐
+                    │      PROTOCOL PARSERS       │
+                    │   • RemoteIDParser          │
+                    │   • ADSBParser    [FUTURE]  │
+                    │   • AISParser     [FUTURE]  │
+                    └─────────────┬───────────────┘
+                                  │
+                    ┌─────────────▼───────────────┐
+                    │      DOMAIN MODELS          │
+                    │   • Drone (dataclass)       │
+                    │   • Aircraft    [FUTURE]    │
+                    │   • Vessel      [FUTURE]    │
+                    └─────────────┬───────────────┘
+                                  │
+                    ┌─────────────▼───────────────┐
+                    │      BUSINESS LOGIC         │
+                    │   • DroneManager            │
+                    │   • Rate limiting           │
+                    │   • Timeout detection       │
+                    │   • State management        │
+                    └─────────────┬───────────────┘
+                                  │
+        ╔═════════════════════════▼════════════════════════╗
+        ║         CoT GENERATOR (Universal Hub)            ║
+        ║   • generate_drone_event()                       ║
+        ║   • generate_aircraft_event()        [FUTURE]    ║
+        ║   • generate_vessel_event()          [FUTURE]    ║
+        ║   • MIL-STD-2525 type codes (-Q suffix)          ║
+        ║   • Timezone-aware timestamps                    ║
+        ╚═════════════════════════╤════════════════════════╝
+                                  │
+                  ┌───────────────┼───────────────┐
+                  │               │               │
+                  ▼               ▼               ▼
+          ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+          │  TAK SINK    │ │  MQTT SINK   │ │ LATTICE SINK │
+          ├──────────────┤ ├──────────────┤ ├──────────────┤
+          │ CoT → TAK    │ │ CoT → JSON   │ │ CoT → Custom │
+          │ (passthru)   │ │ (convert)    │ │ (convert)    │
+          └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+                 │                │                 │
+                 ▼                ▼                 ▼
+          ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+          │TAK Multicast │ │ MQTT Broker  │ │ Lattice API  │
+          │239.2.3.1:6969│ │ Home Assist. │ │   (HTTPS)    │
+          │  ATAK/WinTAK │ │   (MQTT)     │ │              │
+          └──────────────┘ └──────────────┘ └──────────────┘
 ```
+
+**Key Points**:
+- **CoT is the universal format** - all sources normalize to CoT XML
+- **Sinks consume CoT** - not Drone objects directly
+- **TAK Sink**: Passes CoT through (native format)
+- **MQTT/Lattice Sinks**: Convert CoT → their specific formats
+- **Scalability**: Adding new source = implement parser + CoT conversion
+- **Future-proof**: ADS-B, AIS, ground vehicles slot in naturally
 
 ## Component Interactions
 
@@ -248,23 +288,25 @@ Multiple sinks implement the same `BaseSink` interface:
 ```python
 class BaseSink(ABC):
     @abstractmethod
-    def publish_drone(self, drone: Drone) -> None:
+    def publish_cot_event(self, cot_xml: bytes) -> None:
+        """Publish a CoT event (universal format)"""
         pass
 
-    def publish_pilot(self, drone_id: str, lat: float, lon: float, alt: float) -> None:
-        pass
-
-    def publish_home(self, drone_id: str, lat: float, lon: float, alt: float) -> None:
-        pass
-
-    def mark_inactive(self, drone_id: str) -> None:
+    def mark_inactive(self, uid: str) -> None:
+        """Optional: Mark entity as inactive"""
         pass
 
     def close(self) -> None:
+        """Cleanup resources"""
         pass
 ```
 
-DroneManager doesn't know which sinks are connected - it just calls the interface.
+**Key Change**: Sinks now accept CoT XML (bytes) as input, not domain-specific objects.
+- TAK Sink: Directly transmits CoT XML
+- MQTT Sink: Parses CoT XML → extracts position data → publishes as JSON
+- Lattice Sink: Parses CoT XML → converts to Lattice API format
+
+Manager doesn't know which sinks are connected - it just calls the interface.
 
 ### 2. Adapter Pattern (Clients)
 Clients adapt external protocols to our interfaces:
@@ -462,23 +504,84 @@ def test_end_to_end_drone_flow():
 
 ## Extension Points
 
+### Adding a New Input Source (e.g., ADS-B Aircraft)
+1. **Create Domain Model**: `refactor_project/models/aircraft.py`
+   ```python
+   @dataclass
+   class Aircraft:
+       icao: str
+       callsign: str
+       latitude: float
+       longitude: float
+       altitude: float
+       # ... more fields
+   ```
+
+2. **Create Parser**: `refactor_project/parsers/adsb_parser.py`
+   ```python
+   class ADSBParser:
+       def parse(self, adsb_message: bytes) -> Aircraft:
+           # Protocol-specific parsing
+   ```
+
+3. **Extend CotGenerator**: Add aircraft conversion method
+   ```python
+   class CotGenerator:
+       def generate_aircraft_event(self, aircraft: Aircraft) -> bytes:
+           # Map to CoT type: a-f-A-C (friendly civilian aircraft)
+           # Build CoT XML with aircraft data
+   ```
+
+4. **Create Manager**: `refactor_project/managers/aircraft_manager.py`
+   ```python
+   class AircraftManager:
+       def __init__(self, cot_generator: CotGenerator, sinks: List[BaseSink]):
+           # Similar to DroneManager
+   ```
+
+5. **Wire Up**: Connect source → parser → manager → CoT → sinks
+
+**Key Benefit**: Sinks don't change! They already consume CoT, so new sources automatically work.
+
 ### Adding a New Sink
 1. Implement `BaseSink` interface
-2. Create corresponding client if needed
-3. Add configuration options
-4. Wire up in main app
-5. Add tests
+2. Implement `publish_cot_event(cot_xml: bytes)` method
+3. Parse CoT XML to extract needed data
+4. Convert to sink-specific format
+5. Create corresponding client if needed
+6. Add configuration options
+7. Wire up in main app
+8. Add tests
 
-### Adding a New Protocol Parser
-1. Implement `BaseParser` interface
-2. Handle protocol-specific message format
-3. Convert to domain models
-4. Add tests with sample messages
+### Future CoT Type Codes (MIL-STD-2525)
 
-### Adding a New Output Format
-1. Add method to domain model (e.g., `Drone.to_gpx()`)
-2. Create sink that uses new format
-3. Add tests
+```python
+# refactor_project/messaging/cot_generator.py
+
+# Drones (current)
+DRONE_TYPES = {
+    'rotary': 'a-u-A-M-H-Q',    # Military rotary unmanned
+    'fixed': 'a-u-A-M-F-Q',     # Military fixed unmanned
+}
+
+# Aircraft (future)
+AIRCRAFT_TYPES = {
+    'civilian': 'a-f-A-C',      # Friendly civilian aircraft
+    'military': 'a-f-A-M-F',    # Friendly military fixed
+}
+
+# Ships (future)
+VESSEL_TYPES = {
+    'civilian': 'a-f-S-X',      # Friendly sea surface
+    'military': 'a-f-S-C',      # Friendly combatant
+}
+
+# Ground vehicles (future)
+VEHICLE_TYPES = {
+    'civilian': 'a-f-G-E-V',    # Friendly ground vehicle
+    'military': 'a-f-G-U-C',    # Friendly ground unit combat
+}
+```
 
 ## Migration Strategy
 

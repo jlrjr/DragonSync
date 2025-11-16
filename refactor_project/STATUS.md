@@ -23,6 +23,70 @@
 
 ---
 
+## 🎯 Key Architectural Decision: CoT as Universal Format
+
+**Decision Date**: 2025-11-16
+**Status**: Adopted
+
+### Overview
+DragonSync will use **Cursor on Target (CoT) XML as the universal internal interchange format** between parsers and sinks. This TAK-centric architecture provides significant benefits for multi-source expansion.
+
+### Rationale
+1. **Scalability**: Linear scaling (N sources + M sinks) instead of N×M conversions
+2. **TAK Focus**: DragonSync is primarily a TAK integration tool
+3. **Standards-Based**: CoT is designed as a universal position/track format
+4. **Future-Proof**: Natural support for ADS-B aircraft, ships, ground vehicles
+5. **MIL-STD-2525**: Unified type code system for all entity types
+
+### Architecture Flow
+```
+Input Sources → Parsers → Domain Models → CoT Generator → CoT XML (hub) → Sinks → Outputs
+   (Multiple)                              (Universal)      (Universal)    (Multiple)
+```
+
+### Impact on Implementation
+**Phase 4 (Messaging)**:
+- CotGenerator becomes the **universal converter** (not sink-specific)
+- Generates CoT for drones (current) and future sources (aircraft, vessels)
+- MIL-STD-2525 type codes with modern drone designators (-Q suffix)
+
+**Phase 5 (Sinks)**:
+- All sinks **consume CoT XML** (not Drone objects directly)
+- TAK Sink: Passes CoT through (native format)
+- MQTT Sink: Parses CoT → JSON for Home Assistant
+- Lattice Sink: Parses CoT → custom format
+
+**Future Expansion** (ADS-B, Ships, etc.):
+- Add domain model (Aircraft, Vessel)
+- Add parser for protocol
+- Extend CotGenerator with new event type
+- **Sinks unchanged** - they already handle CoT!
+
+### Type Code Standards (MIL-STD-2525)
+```
+Current (Drones):
+  a-u-A-M-H-Q  - Military rotary unmanned (-Q suffix)
+  a-u-A-M-F-Q  - Military fixed unmanned
+
+Future (Aircraft):
+  a-f-A-C      - Friendly civilian aircraft
+  a-f-A-M-F    - Friendly military fixed
+
+Future (Ships):
+  a-f-S-X      - Friendly sea surface
+  a-f-S-C      - Friendly combatant
+
+Future (Ground):
+  a-f-G-E-V    - Friendly ground vehicle
+  a-f-G-U-C    - Friendly ground unit combat
+```
+
+### Documentation
+- See [ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed data flow diagrams
+- See [COT_DESIGN.md](docs/COT_DESIGN.md) for CoT implementation standards
+
+---
+
 ## Infrastructure Setup ✅
 
 **Completed**: 2025-11-15
@@ -283,16 +347,61 @@
 ## Phase 5: Sinks 🔴
 
 **Status**: TODO
-**Dependencies**: Phase 1, 4 complete
+**Dependencies**: Phase 1, 4 complete (CoT generator must exist first)
 **Progress**: 0%
 
+### Overview
+Sinks are output adapters that **consume CoT XML** (the universal format) and distribute to various endpoints. Each sink parses/transforms CoT to its specific output format.
+
+### Architecture
+```
+CoT XML (bytes) → Sink → Output Format → Endpoint
+                  ├─ TakSink → CoT passthrough → TAK server/multicast
+                  ├─ MqttSink → JSON → MQTT broker (Home Assistant)
+                  └─ LatticeSink → Custom format → Lattice API
+```
+
 ### Tasks
-- [ ] Create `BaseSink` interface
-- [ ] Refactor `MqttSink`
-- [ ] Create `HaSink`
-- [ ] Refactor `LatticeSink`
-- [ ] Create `TakSink`
-- [ ] Write sink tests
+
+#### 5.1 BaseSink Interface
+- [ ] Create `sinks/base_sink.py`
+- [ ] Define `BaseSink` ABC with:
+  - `publish_cot_event(cot_xml: bytes) -> None` - main method
+  - `mark_inactive(uid: str) -> None` - optional
+  - `close() -> None` - cleanup
+- [ ] Write interface tests
+
+#### 5.2 TAK Sink (CoT Passthrough)
+- [ ] Create `sinks/tak_sink.py`
+- [ ] Consume CoT XML and forward to TAK endpoint
+- [ ] Support multicast and TCP/TLS
+- [ ] Write TAK sink tests (5 tests)
+
+#### 5.3 MQTT Sink (CoT → JSON)
+- [ ] Create `sinks/mqtt_sink.py`
+- [ ] Parse CoT XML → extract position data
+- [ ] Convert to JSON format for Home Assistant
+- [ ] Publish to MQTT topics
+- [ ] Handle Home Assistant discovery
+- [ ] Write MQTT sink tests (7 tests)
+
+#### 5.4 Lattice Sink (CoT → Custom)
+- [ ] Create `sinks/lattice_sink.py`
+- [ ] Parse CoT XML → extract entity data
+- [ ] Convert to Lattice API format
+- [ ] HTTP POST to Lattice endpoint
+- [ ] Write Lattice sink tests (5 tests)
+
+### Key Design Notes
+- **Input**: All sinks accept `bytes` (CoT XML) as input
+- **Parsing**: Each sink parses CoT XML to extract needed fields
+- **No Domain Models**: Sinks don't need Drone/Aircraft objects directly
+- **Future-Proof**: Works for drones, aircraft, vessels without changes
+
+### Test Coverage Target
+- **Target**: 75% minimum (sinks have I/O overhead)
+- **Total Tests**: ~20 tests
+- **Focus**: CoT parsing, format conversion, error handling
 
 ---
 
