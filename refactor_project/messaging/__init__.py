@@ -8,4 +8,6 @@ CoT messaging components:
 - MulticastHandler: Multicast CoT handling
 """
 
-__all__ = []
+from refactor_project.messaging.cot_generator import CotGenerator
+
+__all__ = ["CotGenerator"]
