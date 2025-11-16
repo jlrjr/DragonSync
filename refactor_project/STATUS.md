@@ -1,8 +1,8 @@
 # DragonSync Refactoring Project - Status
 
 **Last Updated**: 2025-11-16
-**Current Phase**: Phase 5 (Sinks)
-**Overall Progress**: 55% (Infrastructure, Models, Parsers, Managers, and Messaging complete)
+**Current Phase**: Phase 6 (Clients)
+**Overall Progress**: 62% (Infrastructure, Models, Parsers, Managers, Messaging, and Sinks complete)
 
 ## Quick Status
 
@@ -13,7 +13,7 @@
 | Phase 2: Parsers | ✅ DONE | 100% | 14/14 | 91% |
 | Phase 3: Managers | ✅ DONE | 100% | 13/13 | 96% |
 | Phase 4: Messaging | ✅ DONE | 100% | 22/22 | 93% |
-| Phase 5: Sinks | 🔴 TODO | 0% | 0/20 | 0% |
+| Phase 5: Sinks | ✅ DONE | 100% | 55/55 | 92% |
 | Phase 6: Clients | 🔴 TODO | 0% | 0/15 | 0% |
 | Phase 7: Config | 🔴 TODO | 0% | 0/10 | 0% |
 | Phase 8: Integration | 🔴 TODO | 0% | 0/20 | 0% |
@@ -344,64 +344,118 @@ Future (Ground):
 
 ---
 
-## Phase 5: Sinks 🔴
+## Phase 5: Sinks ✅
 
-**Status**: TODO
+**Status**: COMPLETE
+**Started**: 2025-11-16
+**Completed**: 2025-11-16
 **Dependencies**: Phase 1, 4 complete (CoT generator must exist first)
-**Progress**: 0%
+**Progress**: 100%
 
 ### Overview
-Sinks are output adapters that **consume CoT XML** (the universal format) and distribute to various endpoints. Each sink parses/transforms CoT to its specific output format.
+Sinks are output adapters that **consume CoT XML** (the universal format) and distribute to various endpoints. Each sink parses/transforms CoT to its specific output format, following the CoT-centric architecture.
 
 ### Architecture
 ```
 CoT XML (bytes) → Sink → Output Format → Endpoint
                   ├─ TakSink → CoT passthrough → TAK server/multicast
                   ├─ MqttSink → JSON → MQTT broker (Home Assistant)
-                  └─ LatticeSink → Custom format → Lattice API
+                  └─ LatticeSink → Entity format → Lattice API
 ```
 
-### Tasks
+### Tasks Completed
 
-#### 5.1 BaseSink Interface
-- [ ] Create `sinks/base_sink.py`
-- [ ] Define `BaseSink` ABC with:
+#### 5.1 BaseSink Interface ✅
+- [x] Create `sinks/base_sink.py` (abstract interface)
+- [x] Define `BaseSink` ABC with:
   - `publish_cot_event(cot_xml: bytes) -> None` - main method
   - `mark_inactive(uid: str) -> None` - optional
   - `close() -> None` - cleanup
-- [ ] Write interface tests
+- [x] Write interface tests (12 tests, 89% coverage)
 
-#### 5.2 TAK Sink (CoT Passthrough)
-- [ ] Create `sinks/tak_sink.py`
-- [ ] Consume CoT XML and forward to TAK endpoint
-- [ ] Support multicast and TCP/TLS
-- [ ] Write TAK sink tests (5 tests)
+#### 5.2 TAK Sink (CoT Passthrough) ✅
+- [x] Create `sinks/tak_sink.py`
+- [x] Consume CoT XML and forward to TAK endpoint
+- [x] Generate CoT deletion events for inactive entities
+- [x] Write TAK sink tests (11 tests, 100% coverage)
 
-#### 5.3 MQTT Sink (CoT → JSON)
-- [ ] Create `sinks/mqtt_sink.py`
-- [ ] Parse CoT XML → extract position data
-- [ ] Convert to JSON format for Home Assistant
-- [ ] Publish to MQTT topics
-- [ ] Handle Home Assistant discovery
-- [ ] Write MQTT sink tests (7 tests)
+#### 5.3 MQTT Sink (CoT → JSON) ✅
+- [x] Create `sinks/mqtt_sink.py`
+- [x] Parse CoT XML → extract position data
+- [x] Convert to JSON format for Home Assistant
+- [x] Publish to MQTT topics (topic_prefix/{uid})
+- [x] Clear inactive devices with empty payload
+- [x] Write MQTT sink tests (17 tests, 98% coverage)
 
-#### 5.4 Lattice Sink (CoT → Custom)
-- [ ] Create `sinks/lattice_sink.py`
-- [ ] Parse CoT XML → extract entity data
-- [ ] Convert to Lattice API format
-- [ ] HTTP POST to Lattice endpoint
-- [ ] Write Lattice sink tests (5 tests)
+#### 5.4 Lattice Sink (CoT → Custom) ✅
+- [x] Create `sinks/lattice_sink.py`
+- [x] Parse CoT XML → extract entity data
+- [x] Convert to Lattice entity API format
+- [x] Determine entity type from CoT type codes
+- [x] Expire entities via Lattice API
+- [x] Write Lattice sink tests (15 tests, 84% coverage)
 
-### Key Design Notes
-- **Input**: All sinks accept `bytes` (CoT XML) as input
-- **Parsing**: Each sink parses CoT XML to extract needed fields
-- **No Domain Models**: Sinks don't need Drone/Aircraft objects directly
-- **Future-Proof**: Works for drones, aircraft, vessels without changes
+**Files**:
+- `sinks/base_sink.py` (65 lines, 89% coverage)
+- `sinks/tak_sink.py` (92 lines, 100% coverage)
+- `sinks/mqtt_sink.py` (127 lines, 98% coverage)
+- `sinks/lattice_sink.py` (157 lines, 84% coverage)
+- `tests/test_sinks/test_base_sink.py` (145 lines, 12 tests)
+- `tests/test_sinks/test_tak_sink.py` (156 lines, 11 tests)
+- `tests/test_sinks/test_mqtt_sink.py` (206 lines, 17 tests)
+- `tests/test_sinks/test_lattice_sink.py` (171 lines, 15 tests)
 
-### Test Coverage Target
-- **Target**: 75% minimum (sinks have I/O overhead)
-- **Total Tests**: ~20 tests
-- **Focus**: CoT parsing, format conversion, error handling
+### Features Implemented
+
+**BaseSink Interface**:
+- ✅ Abstract base class with Protocol pattern
+- ✅ `publish_cot_event()` - required abstract method
+- ✅ `mark_inactive()` - optional override
+- ✅ `close()` - optional cleanup
+
+**TAK Sink** (Passthrough):
+- ✅ Direct CoT XML forwarding (no parsing)
+- ✅ CoT deletion events (type t-x-d-d)
+- ✅ Dependency injection via TakClient protocol
+- ✅ 100% test coverage
+
+**MQTT Sink** (CoT → JSON):
+- ✅ XML parsing with xml.etree.ElementTree
+- ✅ Extract: position, track, accuracy, callsign, remarks
+- ✅ JSON serialization for Home Assistant
+- ✅ Topic pattern: {prefix}/{uid}
+- ✅ Empty payload for device removal
+- ✅ 98% test coverage
+
+**Lattice Sink** (CoT → Entity):
+- ✅ CoT type code parsing and entity type determination
+- ✅ Drone/aircraft/vessel/vehicle detection
+- ✅ Entity metadata extraction
+- ✅ Lattice entity API format conversion
+- ✅ Entity expiration for inactive tracking
+- ✅ 84% test coverage
+
+### Key Design Achievements
+- **Universal Input**: All sinks accept `bytes` (CoT XML)
+- **CoT Parsing**: Each sink parses CoT XML independently
+- **No Domain Coupling**: Sinks don't depend on Drone/Aircraft models
+- **Future-Proof**: Adding new sources (ADS-B, AIS) requires no sink changes
+- **Dependency Injection**: Protocol-based clients for easy testing
+- **Clean Separation**: Parsing logic separate from I/O
+
+### Test Coverage
+- **BaseSink**: 12 tests (interface validation, concrete implementations)
+- **TakSink**: 11 tests (passthrough, deletion events, errors)
+- **MqttSink**: 17 tests (parsing, JSON conversion, topics, lifecy cle)
+- **LatticeSink**: 15 tests (entity conversion, type detection, API calls)
+- **Total**: 55 tests, 92% overall coverage
+
+### Summary
+- **Total Tests**: 55/55 passing
+- **Total Coverage**: 92% (exceeds 75% target)
+- **Lines of Code**: 441 (sinks) + 678 (tests)
+- **Test-to-Code Ratio**: 1.54:1
+- **Architecture**: CoT-centric with clean separation of concerns
 
 ---
 
@@ -460,15 +514,15 @@ CoT XML (bytes) → Sink → Output Format → Endpoint
 | models | >90% | 92% | ✅ |
 | parsers | >85% | 91% | ✅ |
 | managers | >80% | 96% | ✅ |
-| messaging | >80% | 0% | 🔴 |
-| sinks | >75% | 0% | 🔴 |
+| messaging | >80% | 93% | ✅ |
+| sinks | >75% | 92% | ✅ |
 | clients | >70% | 0% | 🔴 |
 | config | >85% | 0% | 🔴 |
-| **Overall** | **>80%** | **93%** | **✅** |
+| **Overall** | **>80%** | **95%** | **✅** |
 
 ### Test Counts
-- Total Tests: 90
-- Passing: 90
+- Total Tests: 167
+- Passing: 167
 - Failing: 0
 - Skipped: 0
 

@@ -1,12 +1,16 @@
 """
-Output adapters for various protocols
+Output adapters for various protocols.
 
-Sinks publish drone data to external systems:
-- BaseSink: Abstract sink interface
-- MqttSink: MQTT publishing
-- LatticeSink: Lattice integration
-- HaSink: Home Assistant specific logic
-- TakSink: TAK server sink
+Sinks consume CoT XML (universal format) and distribute to external systems:
+- BaseSink: Abstract sink interface (publish_cot_event)
+- TakSink: TAK server/multicast (CoT passthrough)
+- MqttSink: MQTT/Home Assistant (CoT → JSON)
+- LatticeSink: Lattice integration (CoT → custom format)
 """
 
-__all__ = []
+from refactor_project.sinks.base_sink import BaseSink
+from refactor_project.sinks.tak_sink import TakSink
+from refactor_project.sinks.mqtt_sink import MqttSink
+from refactor_project.sinks.lattice_sink import LatticeSink
+
+__all__ = ['BaseSink', 'TakSink', 'MqttSink', 'LatticeSink']
