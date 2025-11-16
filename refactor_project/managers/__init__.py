@@ -7,4 +7,6 @@ Managers coordinate between parsers, models, and sinks:
 - TimeoutManager: Inactivity timeout handling
 """
 
-__all__ = []
+from refactor_project.managers.drone_manager import DroneManager
+
+__all__ = ["DroneManager"]
