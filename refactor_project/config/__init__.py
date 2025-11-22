@@ -1,11 +1,25 @@
 """
 Configuration management
 
-Configuration loading and validation:
-- ConfigLoader: Load configuration files
-- ConfigValidator: Validate configuration
-- Settings: Typed configuration data classes
-- Defaults: Default configuration values
+Provides configuration loading, validation, and environment variable overrides.
 """
 
-__all__ = []
+from refactor_project.config.config_loader import (
+    ConfigLoader,
+    DragonSyncConfig,
+    ZmqConfig,
+    TakConfig,
+    MqttConfig,
+    LatticeConfig,
+    AdsbConfig,
+)
+
+__all__ = [
+    'ConfigLoader',
+    'DragonSyncConfig',
+    'ZmqConfig',
+    'TakConfig',
+    'MqttConfig',
+    'LatticeConfig',
+    'AdsbConfig',
+]
