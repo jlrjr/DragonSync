@@ -58,6 +58,12 @@ If you install DragonSync elsewhere, ensure the following:
 
 ---
 
+## FAA RID Enrichment & Logging
+
+- FAA RID lookups are bundled as a submodule (`faa-rid-lookup`). Dragon telemetry is enriched with RID make/model/source in CoT and MQTT. FAA API fallback is **off by default**; enable by setting `rid_api_enabled = true` in `config.ini` if you want online lookups to fill misses.
+- ZMQ logger (`utils/zmq_logger_for_kml.py`) can add RID fields and log to CSV or SQLite; see `utils/README.md` for flags (`--rid-enabled`, `--rid-api`, `--sqlite`, rotation/retention).
+- Offline viewer for SQLite logs: `python utils/log_viewer.py --db drone_log.sqlite --port 5001` (map + filters, offline-safe). Details in `utils/README.md`.
+
 ## How it Works (on WarDragon)
 
 ```text
@@ -119,7 +125,7 @@ At the moment, only one of these SDR‑driven roles can use the same RF front‑
 Assuming `readsb` is built/installed and you’re using the AntSDR in its Pluto‑compatible mode via SoapySDR:
 
 ```bash
-sudo readsb   --device-type soapysdr --soapy-device="driver=plutosdr"   --freq=1090000000 --gain=auto   --no-interactive   --write-json=/run/readsb --write-json-every=1 --json-location-accuracy=2   --net-bind-address=0.0.0.0 --net-api-port=8080   --soapy-enable-agc   --sdr-buffer-size=128
+sudo readsb --device-type soapysdr --soapy-device="driver=plutosdr" --freq=1090000000 --no-interactive --write-json=/run/readsb --write-json-every=1 --json-location-accuracy=2 --net-bind-address=0.0.0.0 --net-api-port=8080 --soapy-enable-agc --sdr-buffer-size=128
 ```
 
 Notes:

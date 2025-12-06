@@ -1,5 +1,9 @@
 cffi
 cryptography
+gps
 lxml
+netifaces
+psutil
 pycparser
 pyzmq
+requests
