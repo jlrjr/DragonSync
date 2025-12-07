@@ -1,3 +1,7 @@
+# User-specific configuration files
+config.ini
+gps.ini
+
 # Python
 __pycache__/
 *.py[cod]
