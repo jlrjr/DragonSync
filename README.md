@@ -27,6 +27,15 @@ DragonSync can also ingest **ADS‑B / UAT (978 MHz)** aircraft data from a loca
 
 ## Requirements  
 
+### **User Config Files:**
+To prevent potential git conflicts in the future, original `config.ini` and `gps.ini` files are provided as *-example.ini files. 
+
+- **Run setup.sh**
+This will copy the example files to the properly named user config files. You can also run this script at any time to view differences between the latest pulled example files and your user config file content.
+   ```bash
+   ./setup.sh
+   ```
+
 ### **Pre-installed on WarDragon Pro:**  
 If running DragonSync on the WarDragon Pro kit, all dependencies are pre-configured, including hardware-specific sensors and GPS modules. Future WarDragon Pro images will also include `readsb` prebuilt for easier ADS‑B integration.
 
