@@ -59,6 +59,15 @@ class Drone:
         caa_id: CAA registration ID
         freq: Frequency in Hz (or MHz if < 1e5)
 
+        rid_tracking: FAA RID tracking number (enrichment data)
+        rid_status: FAA RID status (enrichment data)
+        rid_make: Drone manufacturer from FAA database
+        rid_model: Drone model from FAA database
+        rid_source: Source of RID data ('local', 'api', etc.)
+        rid_lookup_attempted: Whether RID lookup has been attempted
+        rid_lookup_success: Whether RID lookup was successful
+        rid_lookup_pending: Whether RID lookup is currently pending
+
         last_update_time: Unix timestamp of last update
         last_sent_time: Unix timestamp of last CoT send
         last_sent_lat: Latitude when last CoT was sent
@@ -106,6 +115,18 @@ class Drone:
     runtime: int = 0
     caa_id: str = ""
     freq: Optional[float] = None
+
+    # FAA Remote ID lookup fields (enrichment data)
+    rid_tracking: Optional[str] = None
+    rid_status: Optional[str] = None
+    rid_make: Optional[str] = None
+    rid_model: Optional[str] = None
+    rid_source: Optional[str] = None
+
+    # RID lookup state tracking (set by __post_init__)
+    rid_lookup_attempted: bool = field(init=False, default=False)
+    rid_lookup_success: bool = field(init=False, default=False)
+    rid_lookup_pending: bool = field(init=False, default=False)
 
     # Tracking fields (set by __post_init__)
     last_update_time: float = field(init=False)
@@ -243,3 +264,40 @@ class Drone:
 
         # Update timestamp
         self.last_update_time = time.time()
+
+    def apply_rid_lookup_result(self, lookup: dict) -> None:
+        """
+        Apply FAA Remote ID lookup results to this drone.
+
+        Caches the RID lookup results (make, model, source, etc.) on the drone
+        object to avoid repeat queries. Updates lookup state flags.
+
+        Args:
+            lookup: Dictionary containing RID lookup results with keys:
+                - found (bool): Whether the lookup succeeded
+                - make (str): Manufacturer name
+                - model (str): Model name
+                - source (str): Source of data ('local', 'api', etc.)
+                - rid_tracking (str): RID tracking number
+                - status (str): RID status
+
+        Example:
+            >>> drone = Drone(id="ABC123", ...)
+            >>> result = {"found": True, "make": "DJI", "model": "M30T", "source": "local"}
+            >>> drone.apply_rid_lookup_result(result)
+            >>> print(drone.rid_make)
+            'DJI'
+        """
+        self.rid_lookup_attempted = True
+        self.rid_lookup_success = bool(lookup.get("found", False))
+        self.rid_lookup_pending = False
+
+        if not self.rid_lookup_success:
+            return
+
+        # Cache the lookup results
+        self.rid_tracking = lookup.get("rid_tracking")
+        self.rid_status = lookup.get("status")
+        self.rid_make = lookup.get("make")
+        self.rid_model = lookup.get("model")
+        self.rid_source = lookup.get("source")

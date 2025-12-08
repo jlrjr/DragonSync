@@ -444,5 +444,264 @@ class TestDroneEdgeCases:
         assert drone.mac == ""
 
 
+class TestDroneRIDLookup:
+    """Test Drone FAA Remote ID lookup functionality."""
+
+    def test_rid_fields_default_to_none(self):
+        """Test that RID fields default to None on initialization."""
+        drone = Drone(
+            id="TEST",
+            lat=42.0,
+            lon=-71.0,
+            speed=10.0,
+            vspeed=1.0,
+            alt=100.0,
+            height=50.0,
+            pilot_lat=42.0,
+            pilot_lon=-71.0,
+            description="Test",
+            mac="AA:BB:CC:DD:EE:FF",
+            rssi=-70
+        )
+
+        assert drone.rid_tracking is None
+        assert drone.rid_status is None
+        assert drone.rid_make is None
+        assert drone.rid_model is None
+        assert drone.rid_source is None
+
+    def test_rid_lookup_state_defaults(self):
+        """Test that RID lookup state flags default correctly."""
+        drone = Drone(
+            id="TEST",
+            lat=42.0,
+            lon=-71.0,
+            speed=10.0,
+            vspeed=1.0,
+            alt=100.0,
+            height=50.0,
+            pilot_lat=42.0,
+            pilot_lon=-71.0,
+            description="Test",
+            mac="AA:BB:CC:DD:EE:FF",
+            rssi=-70
+        )
+
+        assert drone.rid_lookup_attempted is False
+        assert drone.rid_lookup_success is False
+        assert drone.rid_lookup_pending is False
+
+    def test_apply_rid_lookup_result_success(self):
+        """Test applying successful RID lookup results."""
+        drone = Drone(
+            id="TEST-DRONE-123",
+            lat=42.0,
+            lon=-71.0,
+            speed=10.0,
+            vspeed=1.0,
+            alt=100.0,
+            height=50.0,
+            pilot_lat=42.0,
+            pilot_lon=-71.0,
+            description="Test",
+            mac="AA:BB:CC:DD:EE:FF",
+            rssi=-70
+        )
+
+        lookup_result = {
+            "found": True,
+            "make": "DJI",
+            "model": "Mavic 3",
+            "source": "local",
+            "rid_tracking": "FA123456",
+            "status": "Registered"
+        }
+
+        drone.apply_rid_lookup_result(lookup_result)
+
+        assert drone.rid_lookup_attempted is True
+        assert drone.rid_lookup_success is True
+        assert drone.rid_lookup_pending is False
+        assert drone.rid_make == "DJI"
+        assert drone.rid_model == "Mavic 3"
+        assert drone.rid_source == "local"
+        assert drone.rid_tracking == "FA123456"
+        assert drone.rid_status == "Registered"
+
+    def test_apply_rid_lookup_result_not_found(self):
+        """Test applying RID lookup when serial not found."""
+        drone = Drone(
+            id="UNKNOWN-DRONE",
+            lat=42.0,
+            lon=-71.0,
+            speed=10.0,
+            vspeed=1.0,
+            alt=100.0,
+            height=50.0,
+            pilot_lat=42.0,
+            pilot_lon=-71.0,
+            description="Test",
+            mac="AA:BB:CC:DD:EE:FF",
+            rssi=-70
+        )
+
+        lookup_result = {
+            "found": False
+        }
+
+        drone.apply_rid_lookup_result(lookup_result)
+
+        assert drone.rid_lookup_attempted is True
+        assert drone.rid_lookup_success is False
+        assert drone.rid_lookup_pending is False
+        # Fields should remain None
+        assert drone.rid_make is None
+        assert drone.rid_model is None
+        assert drone.rid_source is None
+
+    def test_apply_rid_lookup_result_partial_data(self):
+        """Test applying RID lookup with partial data."""
+        drone = Drone(
+            id="PARTIAL-DATA",
+            lat=42.0,
+            lon=-71.0,
+            speed=10.0,
+            vspeed=1.0,
+            alt=100.0,
+            height=50.0,
+            pilot_lat=42.0,
+            pilot_lon=-71.0,
+            description="Test",
+            mac="AA:BB:CC:DD:EE:FF",
+            rssi=-70
+        )
+
+        # Only make and source, no model
+        lookup_result = {
+            "found": True,
+            "make": "Autel",
+            "source": "api"
+        }
+
+        drone.apply_rid_lookup_result(lookup_result)
+
+        assert drone.rid_lookup_success is True
+        assert drone.rid_make == "Autel"
+        assert drone.rid_model is None  # Not provided
+        assert drone.rid_source == "api"
+        assert drone.rid_tracking is None
+        assert drone.rid_status is None
+
+    def test_apply_rid_lookup_result_api_source(self):
+        """Test RID lookup from API fallback."""
+        drone = Drone(
+            id="API-LOOKUP",
+            lat=42.0,
+            lon=-71.0,
+            speed=10.0,
+            vspeed=1.0,
+            alt=100.0,
+            height=50.0,
+            pilot_lat=42.0,
+            pilot_lon=-71.0,
+            description="Test",
+            mac="AA:BB:CC:DD:EE:FF",
+            rssi=-70
+        )
+
+        lookup_result = {
+            "found": True,
+            "make": "Parrot",
+            "model": "Anafi",
+            "source": "api",  # From FAA API, not local DB
+        }
+
+        drone.apply_rid_lookup_result(lookup_result)
+
+        assert drone.rid_lookup_success is True
+        assert drone.rid_source == "api"
+        assert drone.rid_make == "Parrot"
+        assert drone.rid_model == "Anafi"
+
+    def test_apply_rid_lookup_clears_pending_flag(self):
+        """Test that applying results clears the pending flag."""
+        drone = Drone(
+            id="PENDING-TEST",
+            lat=42.0,
+            lon=-71.0,
+            speed=10.0,
+            vspeed=1.0,
+            alt=100.0,
+            height=50.0,
+            pilot_lat=42.0,
+            pilot_lon=-71.0,
+            description="Test",
+            mac="AA:BB:CC:DD:EE:FF",
+            rssi=-70
+        )
+
+        # Simulate pending lookup
+        drone.rid_lookup_pending = True
+
+        lookup_result = {"found": True, "make": "DJI", "model": "Mini 2", "source": "local"}
+        drone.apply_rid_lookup_result(lookup_result)
+
+        assert drone.rid_lookup_pending is False
+
+    def test_apply_rid_lookup_multiple_times(self):
+        """Test applying RID lookup multiple times (should update)."""
+        drone = Drone(
+            id="MULTI-LOOKUP",
+            lat=42.0,
+            lon=-71.0,
+            speed=10.0,
+            vspeed=1.0,
+            alt=100.0,
+            height=50.0,
+            pilot_lat=42.0,
+            pilot_lon=-71.0,
+            description="Test",
+            mac="AA:BB:CC:DD:EE:FF",
+            rssi=-70
+        )
+
+        # First lookup
+        first_result = {"found": True, "make": "DJI", "model": "Phantom", "source": "local"}
+        drone.apply_rid_lookup_result(first_result)
+        assert drone.rid_make == "DJI"
+        assert drone.rid_model == "Phantom"
+
+        # Second lookup (update with different data)
+        second_result = {"found": True, "make": "Autel", "model": "EVO", "source": "api"}
+        drone.apply_rid_lookup_result(second_result)
+        assert drone.rid_make == "Autel"
+        assert drone.rid_model == "EVO"
+        assert drone.rid_source == "api"
+
+    def test_rid_fields_can_be_set_at_init(self):
+        """Test that RID fields can be provided at initialization."""
+        drone = Drone(
+            id="INIT-RID",
+            lat=42.0,
+            lon=-71.0,
+            speed=10.0,
+            vspeed=1.0,
+            alt=100.0,
+            height=50.0,
+            pilot_lat=42.0,
+            pilot_lon=-71.0,
+            description="Test",
+            mac="AA:BB:CC:DD:EE:FF",
+            rssi=-70,
+            rid_make="DJI",
+            rid_model="M30T",
+            rid_source="local"
+        )
+
+        assert drone.rid_make == "DJI"
+        assert drone.rid_model == "M30T"
+        assert drone.rid_source == "local"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
